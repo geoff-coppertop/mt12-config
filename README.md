@@ -65,3 +65,11 @@ function `def` is `param,enabled,repeat` with repeat in whole seconds
 Inferred, not proven: logical switch `delay` is in 0.1 s units (taken from the
 existing M-07R value of 50); which haptic pattern (0-3) is longest. The output
 has not been loaded on a radio or in Companion.
+
+## Notes on the copied gvar mixing
+
+The steering expo line on both cars has `trimSource: -3`: per EdgeTX
+`mixer.cpp` that is trim index 2 (`-value - 1`), not the stick's own trim (0) and
+not off (1). It differs from the trims the gvar adjusters read (`T2`, `T1`,
+`T4` = indexes 1, 0, 3). Which physical MT12 trim index 2 is was not
+determined; check the Trim field on the ST line under Inputs on the radio.
