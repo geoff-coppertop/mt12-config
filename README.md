@@ -23,12 +23,14 @@ an old backup would overwrite recent changes when copied back.
 
 ## Generate and apply alerts
 
+Needs [uv](https://docs.astral.sh/uv/); it creates the Python environment from
+`pyproject.toml` and `uv.lock` on first run, nothing to install by hand.
+
 ```
-pip install pyyaml
-python3 alerts/gen_alerts.py --dry-run     # report only
-python3 alerts/gen_alerts.py               # writes build/MODELS/model01.yml, model02.yml
-python3 alerts/gen_alerts.py --profile practice
-python3 -m unittest alerts.test_gen_alerts
+uv run alerts/gen_alerts.py --dry-run      # report only
+uv run alerts/gen_alerts.py                # writes build/MODELS/model01.yml and model02.yml
+uv run alerts/gen_alerts.py --profile practice
+uv run python -m unittest alerts.test_gen_alerts
 ```
 
 Copy the two files from `build/MODELS/` to `MODELS/` on the card, then open
