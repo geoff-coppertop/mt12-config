@@ -40,6 +40,12 @@ models:
     replace_existing: true    # replaces the old "RxBt < 7.4 V" switch (L1) and
                               # the PLAY_VALUE function on SF4
   model02.yml:                # BD-8
-    first_function_slot: 0
-    replace_existing: false
+    first_function_slot: 3    # SF1-SF3 are the trim -> gvar adjusters ported from the M-07R
+    replace_existing: true    # so re-running with new thresholds overwrites the old alert
+    # One-time port of the M-07R's gvar mixing (skipped once the target has gvars).
+    # Trims are zeroed; steering expo is set below instead of copied.
+    port_gvar_mix:
+      from: model01.yml
+      start_values: {Str: 100, Thr: 100, BrO: 0, BrW: 100}
+      steering_expo: 0
   # Add "profile: practice" under a model to override active_profile for it.

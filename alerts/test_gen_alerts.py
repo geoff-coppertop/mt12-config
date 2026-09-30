@@ -18,8 +18,8 @@ def read(name):
 class GenAlerts(unittest.TestCase):
     def run_gen(self, name, cfg=CFG):
         notes = []
-        out, kept_ls, kept_cf = g.generate(read(name), cfg, cfg["models"][name], notes)
-        g.verify(read(name), out, kept_ls, kept_cf)
+        out, kept_ls, kept_cf, ported = g.generate(read(name), cfg, cfg["models"][name], notes)
+        g.verify(read(name), out, kept_ls, kept_cf, ported)
         return out, notes
 
     def test_only_alert_sections_change_and_crlf_kept(self):
@@ -35,7 +35,7 @@ class GenAlerts(unittest.TestCase):
         self.assertEqual(data["logicalSw"][0]["andsw"], "!L2")
         self.assertEqual(data["logicalSw"][0]["delay"], 50)
         self.assertEqual(data["logicalSw"][1]["def"], "tele(10),66")
-        self.assertEqual(data["customFn"][2]["def"], "Wrn1,1,4")
+        self.assertEqual(data["customFn"][5]["def"], "Wrn1,1,4")
 
     def test_gvar_adjusters_kept_on_m07r(self):
         out, _ = self.run_gen("model01.yml")
@@ -43,6 +43,26 @@ class GenAlerts(unittest.TestCase):
         after = yaml.safe_load(out)["customFn"]
         for slot in (0, 1, 2):
             self.assertEqual(before[slot], after[slot])
+
+    def test_gvar_mix_ported_to_bd8(self):
+        out, notes = self.run_gen("model02.yml")
+        a, b = yaml.safe_load(read("model01.yml")), yaml.safe_load(out)
+        self.assertEqual(a["gvars"], b["gvars"])
+        for slot in (0, 1, 2):
+            self.assertEqual(a["customFn"][slot], b["customFn"][slot])
+        self.assertEqual(b["expoData"][:2], a["expoData"][:2])
+        self.assertEqual(b["expoData"][2]["curve"]["value"], 0)
+        fm = b["flightModeData"][0]
+        self.assertEqual([t["value"] for t in fm["trim"].values()], [0, 0])
+        self.assertEqual([fm["gvars"][i]["val"] for i in range(4)], [100, 100, 0, 100])
+        self.assertEqual((b["thrTrim"], b["displayTrims"], b["trimInc"]), (1, 2, -1))
+
+    def test_second_pass_is_stable(self):
+        out, _ = self.run_gen("model02.yml")
+        notes = []
+        again, *_ = g.generate(out, CFG, CFG["models"]["model02.yml"], notes)
+        self.assertEqual(out, again)
+        self.assertIn("gvar mixing already present, left alone", notes)
 
     def test_practice_profile(self):
         cfg = copy.deepcopy(CFG)

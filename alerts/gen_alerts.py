@@ -118,6 +118,116 @@ def cf_entry(slot, switch, action):
     return [f"   {slot}:", f'      swtch: "{switch}"', f"      func: {func}", f'      def: "{param},1,{rep}"']
 
 
+# ------------------------------------------------------------ gvar mix porting
+
+GVAR_MAX = 1024  # radio/src/gvars.h; a gvar's range is [-GVAR_MAX + min, GVAR_MAX - max]
+
+
+def set_block(lines, key, block, before):
+    """Replace top-level section `key` with raw `block` lines, or insert it."""
+    blocks = top_blocks(lines)
+    if key in blocks:
+        s, e = blocks[key]
+        lines[s:e] = block
+        return
+    anchors = [blocks[k][0] for k in before if k in blocks]
+    if not anchors:
+        raise GenError(f"nowhere to insert {key}: none of {before} present")
+    pos = min(anchors)
+    lines[pos:pos] = block
+
+
+def port_gvar_mix(lines, src_text, pcfg, notes):
+    """Copy the trim -> gvar mixing of another model into this one.
+
+    Copies: thrTrim/displayTrims/trimInc, the expoData lines that read the
+    gvars, the gvars definitions, the ADJUST_GVAR special functions and a
+    flightModeData block with trims zeroed and gvars at their start values.
+    Runs only when the target has no gvars yet, so a later backup that already
+    contains the setup is left alone.
+    """
+    eol = "\r\n" if "\r\n" in "\n".join(lines) else "\n"
+    if "gvars" in top_blocks(lines):
+        notes.append("gvar mixing already present, left alone")
+        return
+    src = src_text.split("\r\n" if "\r\n" in src_text else "\n")
+    sb, tb = top_blocks(src), top_blocks(lines)
+    sdata, tdata = yaml.safe_load(src_text), yaml.safe_load(eol.join(lines))
+    for key in ("gvars", "expoData", "flightModeData", "customFn"):
+        if key not in sb:
+            raise GenError(f"source model has no {key}")
+    if "flightModeData" in tb:
+        raise GenError("target has flightModeData but no gvars; port by hand")
+    if sdata["mixData"] != tdata["mixData"] or sdata.get("inputNames") != tdata.get("inputNames"):
+        raise GenError("mixData or inputNames differ between source and target; port by hand")
+
+    def section(key):
+        s, e = sb[key]
+        return src[s:e]
+
+    # trim behaviour: copy the three scalar lines verbatim
+    for key in ("thrTrim", "displayTrims", "trimInc"):
+        lines[top_blocks(lines)[key][0]] = src[sb[key][0]]
+
+    # expoData: source lines, with the steering expo curve set as configured
+    expo, in_st = section("expoData"), False
+    for i, line in enumerate(expo):
+        if line == " -":
+            in_st = False
+        elif line.strip() == 'srcRaw: "ST"':
+            in_st = True
+        elif in_st and re.match(r"^      value: -?\d+$", line):
+            expo[i] = f"      value: {int(pcfg.get('steering_expo', 0))}"
+    set_block(lines, "expoData", expo, ["thrTraceSrc"])
+
+    # gvar definitions, in the position the radio writes them
+    set_block(lines, "gvars", section("gvars"), ["rssiSource", "rfAlarms", "thrTrimSw"])
+
+    # trim -> gvar adjusters keep their slots
+    cf = split_entries(section("customFn")[1:])
+    adj = {slot: e for slot, e in cf.items() if any("func: ADJUST_GVAR" in l for l in e)}
+    first = pcfg["first_function_slot"]
+    if adj and max(adj) >= first:
+        raise GenError(f"first_function_slot {first} collides with adjuster slot {max(adj)}")
+    block = ["customFn: "]
+    for slot in sorted(adj):
+        block += adj[slot]
+    set_block(lines, "customFn", block, ["flightModeData", "thrTraceSrc"])
+
+    # flightModeData: trims zero, gvars at start values
+    names = {i: g for i, g in sdata["gvars"].items()}
+    start = pcfg["start_values"]
+    values = {}
+    for i, g in names.items():
+        if g["name"] not in start:
+            raise GenError(f"no start value for gvar {g['name']}")
+        v = int(round(start[g["name"]] * (10 if g.get("prec") else 1)))
+        lo, hi = -GVAR_MAX + g["min"], GVAR_MAX - g["max"]
+        if not lo <= v <= hi:
+            raise GenError(f"start value {start[g['name']]} for {g['name']} outside its range")
+        values[i] = v
+    fm, mode, gi = section("flightModeData"), None, None
+    for i, line in enumerate(fm):
+        if line.startswith("      trim:"):
+            mode = "trim"
+        elif line.startswith("      gvars:"):
+            mode = "gvars"
+        elif re.match(r"^      \w", line):
+            mode = None
+        m = re.match(r"^         (\d+):$", line)
+        if m:
+            gi = int(m.group(1))
+        if mode == "trim" and re.match(r"^            value: -?\d+$", line):
+            fm[i] = "            value: 0"
+        elif mode == "gvars" and re.match(r"^            val: -?\d+$", line):
+            fm[i] = f"            val: {values.get(gi, 0)}"
+    set_block(lines, "flightModeData", fm, ["thrTraceSrc"])
+    notes.append(
+        "ported gvar mixing (" + ", ".join(g["name"] for g in names.values())
+        + f"), trims zeroed, steering expo {int(pcfg.get('steering_expo', 0))}"
+    )
+
+
 # --------------------------------------------------------------------- engine
 
 def sensor_index(data, label):
@@ -136,7 +246,7 @@ def stage(profile, name):
     return p["volts"], int(round(p["delay_s"] * 10))
 
 
-def generate(text, cfg, model_cfg, notes):
+def generate(text, cfg, model_cfg, notes, src_dir=None):
     eol = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(eol)
     data = yaml.safe_load(text)
@@ -171,6 +281,12 @@ def generate(text, cfg, model_cfg, notes):
     if slot > MAX_CUSTOM_FUNCTIONS:
         raise GenError("too many special functions")
 
+    pcfg = model_cfg.get("port_gvar_mix")
+    if pcfg:
+        src_dir = src_dir or Path(__file__).resolve().parent.parent / "radio" / "MODELS"
+        port_gvar_mix(lines, (src_dir / pcfg["from"]).read_bytes().decode("utf-8"),
+                      {**pcfg, "first_function_slot": first}, notes)
+
     blocks = top_blocks(lines)
 
     def existing(key):
@@ -203,19 +319,24 @@ def generate(text, cfg, model_cfg, notes):
         f"alarm < {a_v:.1f} V for {a_d / 10:g} s (L2), sensor tele({sensor}), "
         f"{len(new_cf)} special functions from SF{first + 1}"
     )
-    return eol.join(lines), kept_ls, kept_cf
+    return eol.join(lines), kept_ls, kept_cf, bool(pcfg)
 
 
-def verify(original, generated, kept_ls, kept_cf):
-    """Parse both files and confirm only the two intended sections differ."""
+PORTED = {"thrTrim", "displayTrims", "trimInc", "expoData", "gvars", "flightModeData"}
+
+
+def verify(original, generated, kept_ls, kept_cf, ported=False):
+    """Parse both files and confirm only the intended sections differ."""
     a, b = yaml.safe_load(original), yaml.safe_load(generated)
     for key in set(a) | set(b):
-        if key in ("logicalSw", "customFn"):
+        if key in ("logicalSw", "customFn") or (ported and key in PORTED):
             continue
         if a.get(key) != b.get(key):
             raise GenError(f"unexpected change in section {key}")
     for key, kept in (("logicalSw", kept_ls), ("customFn", kept_cf)):
         for slot in kept:
+            if ported and slot not in (a.get(key) or {}):
+                continue  # added by the gvar port, not present in the original
             if (a.get(key) or {}).get(slot) != (b.get(key) or {}).get(slot):
                 raise GenError(f"{key}[{slot}] changed but should have been kept")
 
@@ -243,8 +364,9 @@ def main(argv=None):
         try:
             text = src.read_bytes().decode("utf-8")
             notes = []
-            out, kept_ls, kept_cf = generate(text, cfg, {**model_cfg, **({"profile": args.profile} if args.profile else {})}, notes)
-            verify(text, out, kept_ls, kept_cf)
+            out, kept_ls, kept_cf, ported = generate(
+                text, cfg, {**model_cfg, **({"profile": args.profile} if args.profile else {})}, notes, args.src)
+            verify(text, out, kept_ls, kept_cf, ported)
         except (GenError, OSError, KeyError, yaml.YAMLError) as exc:
             print(f"{fname}: ERROR {exc}", file=sys.stderr)
             failed = True
