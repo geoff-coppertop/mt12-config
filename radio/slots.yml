@@ -1,0 +1,5 @@
+# Model slot on the radio for each file in MODELS/. The radio expects
+# MODELS/model<NN>.yml, so the generator writes build/MODELS/ with those names.
+bronco: 0
+m-07r: 1
+bd-8: 2

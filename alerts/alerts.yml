@@ -35,11 +35,11 @@ actions:
 # special function from first_function_slot upward in the listed models.
 # Everything else in the file is left alone.
 models:
-  model01.yml:                # M-07R
+  m-07r:
     first_function_slot: 3    # SF1-SF3 are trim -> gvar adjusters, keep them
     replace_existing: true    # replaces the old "RxBt < 7.4 V" switch (L1) and
                               # the PLAY_VALUE function on SF4
-  model02.yml:                # BD-8
+  bd-8:
     first_function_slot: 0
     replace_existing: false
   # Add "profile: practice" under a model to override active_profile for it.

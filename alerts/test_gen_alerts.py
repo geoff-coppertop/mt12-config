@@ -12,7 +12,7 @@ CFG = yaml.safe_load((ROOT / "alerts" / "alerts.yml").read_text())
 
 
 def read(name):
-    return (ROOT / "radio" / "MODELS" / name).read_bytes().decode("utf-8")
+    return (ROOT / "radio" / "MODELS" / f"{name}.yml").read_bytes().decode("utf-8")
 
 
 class GenAlerts(unittest.TestCase):
@@ -29,7 +29,7 @@ class GenAlerts(unittest.TestCase):
             self.assertTrue(out.endswith("\r\n"))
 
     def test_expected_values(self):
-        out, _ = self.run_gen("model02.yml")
+        out, _ = self.run_gen("bd-8")
         data = yaml.safe_load(out)
         self.assertEqual(data["logicalSw"][0]["def"], "tele(10),70")
         self.assertEqual(data["logicalSw"][0]["andsw"], "!L2")
@@ -38,8 +38,8 @@ class GenAlerts(unittest.TestCase):
         self.assertEqual(data["customFn"][2]["def"], "Wrn1,1,4")
 
     def test_gvar_adjusters_kept_on_m07r(self):
-        out, _ = self.run_gen("model01.yml")
-        before = yaml.safe_load(read("model01.yml"))["customFn"]
+        out, _ = self.run_gen("m-07r")
+        before = yaml.safe_load(read("m-07r"))["customFn"]
         after = yaml.safe_load(out)["customFn"]
         for slot in (0, 1, 2):
             self.assertEqual(before[slot], after[slot])
@@ -47,20 +47,20 @@ class GenAlerts(unittest.TestCase):
     def test_practice_profile(self):
         cfg = copy.deepcopy(CFG)
         cfg["active_profile"] = "practice"
-        out, _ = self.run_gen("model02.yml", cfg)
+        out, _ = self.run_gen("bd-8", cfg)
         self.assertEqual(yaml.safe_load(out)["logicalSw"][0]["def"], "tele(10),72")
 
     def test_refuses_to_overwrite_without_flag(self):
         cfg = copy.deepcopy(CFG)
-        cfg["models"]["model01.yml"]["replace_existing"] = False
+        cfg["models"]["m-07r"]["replace_existing"] = False
         with self.assertRaises(g.GenError):
-            self.run_gen("model01.yml", cfg)
+            self.run_gen("m-07r", cfg)
 
     def test_rejects_unknown_sound(self):
         cfg = copy.deepcopy(CFG)
         cfg["actions"]["alarm"][1]["name"] = "Nope"
         with self.assertRaises(g.GenError):
-            self.run_gen("model02.yml", cfg)
+            self.run_gen("bd-8", cfg)
 
 
 if __name__ == "__main__":
