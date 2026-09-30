@@ -7,6 +7,7 @@ for RxBt battery warning/alarm alerts on the two ER3C-i cars (M-07R and BD-8).
 radio/            byte-exact copy of the card: MODELS/, RADIO/radio.yml, version file
 alerts/alerts.yml thresholds, profiles, actions, per-model settings
 alerts/gen_alerts.py  reads radio/MODELS, writes build/MODELS (gitignored)
+tools/card.py     pull from / push to the SD card
 ```
 
 Not tracked: `SCRIPTS/` (stock), `SOUNDS/` (stock pack), `LOGS/`, `SCREENSHOTS/`,
@@ -14,12 +15,39 @@ Not tracked: `SCRIPTS/` (stock), `SOUNDS/` (stock pack), `LOGS/`, `SCREENSHOTS/`
 are routed through Git LFS by `.gitattributes`, so install `git-lfs` before
 adding any. `*.yml` is kept byte-exact because the radio writes CRLF.
 
-## Back up
+## Sync with the card
 
-Copy `MODELS/`, `RADIO/` and `edgetx.sdcard.version` from the card into
-`radio/`, review `git diff`, commit. Do this **right before** generating: the
-model files also hold trims and gvars (the M-07R adjusts gvars from trims), so
-an old backup would overwrite recent changes when copied back.
+`tools/card.py` reads from and writes to the card directly. It finds the card by
+itself (Windows drive letters, WSL `/mnt/<letter>`, Linux `/media/$USER/*` and
+`/run/media/$USER/*`) by looking for `RADIO/radio.yml` with `board: mt12`. Override
+with `--card PATH` (`E:\`, `/mnt/e`, `/media/me/MT12`) or the `MT12_CARD` variable.
+Files are copied as bytes, so CRLF survives, and `.gitattributes` stops Windows
+git (`autocrlf`) from rewriting them.
+
+```
+uv run tools/card.py status     # what differs between card and radio/
+uv run tools/card.py pull       # card -> radio/, commit "Backup from card <time>", push to GitHub
+uv run tools/card.py push       # build/MODELS -> card
+```
+
+`pull` options: `--no-push` (commit only), `--no-git` (copy only). It does nothing
+if the card matches the last backup. `push` options: `--dry-run`, `--force`.
+
+**Race tweak, then backup:** `pull`.
+**Tweak, then push:** `pull` (so the repo has the latest trims and gvars), edit
+`alerts/alerts.yml`, `uv run alerts/gen_alerts.py`, `push`, then eject the card.
+
+`push` refuses when a card file differs from both the last backup and the last
+push (changes made on the radio that would be lost), and when `build/` is older
+than `radio/` (regenerate first). It saves the files it replaces in
+`build/previous/<time>/` and re-reads each file after writing it.
+
+WSL does not mount removable drives by itself. If no card is found, mount it once
+per insertion: `sudo mkdir -p /mnt/e && sudo mount -t drvfs E: /mnt/e` (see
+[Microsoft's WSL file system post](https://learn.microsoft.com/en-us/archive/blogs/wsl/file-system-improvements-to-the-windows-subsystem-for-linux);
+whether a card inserted after WSL started can be mounted this way is untested).
+Not yet tried on a real card, Windows or WSL; the logic is covered by tests on
+temporary folders.
 
 ## Generate and apply alerts
 
@@ -30,10 +58,10 @@ Needs [uv](https://docs.astral.sh/uv/); it creates the Python environment from
 uv run alerts/gen_alerts.py --dry-run      # report only
 uv run alerts/gen_alerts.py                # writes build/MODELS/model01.yml and model02.yml
 uv run alerts/gen_alerts.py --profile practice
-uv run python -m unittest alerts.test_gen_alerts
+uv run python -m unittest alerts.test_gen_alerts tools.test_card
 ```
 
-Copy the two files from `build/MODELS/` to `MODELS/` on the card, then open
+Push them with `uv run tools/card.py push` (or copy `build/MODELS/*` to `MODELS/` on the card), then open
 each model on the radio (or in EdgeTX Companion) and check Logical Switches and
 Special Functions before relying on it. To test, temporarily raise the warning
 voltage above a fresh pack's voltage and confirm it fires after the delay.
