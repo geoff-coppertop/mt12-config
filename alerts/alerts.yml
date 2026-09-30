@@ -1,0 +1,45 @@
+# Battery warning/alarm settings for the ER3C-i cars.
+#
+# Voltages are pack voltage as reported by the receiver (RxBt), read UNDER
+# LOAD, so they sag below resting voltage while driving. Both cars are 2S LiPo.
+# Starting points only: tune them from your own telemetry logs (see README).
+
+# Which profile gets written unless a model overrides it.
+active_profile: race
+
+# Telemetry sensor to watch. Its index is looked up by label in each model file.
+sensor: RxBt
+
+profiles:
+  race:                       # short heats, packs stay near full
+    warning: {volts: 7.0, delay_s: 5.0}
+    alarm:   {volts: 6.6, delay_s: 3.0}
+  practice:                   # long runs, stop earlier to protect the pack
+    warning: {volts: 7.2, delay_s: 5.0}
+    alarm:   {volts: 6.8, delay_s: 3.0}
+
+# What fires at each stage. Repeat is in seconds, or "once".
+#   haptic: pattern is the EdgeTX haptic pattern index (0-3). Which one is
+#           longest is not documented here; pick by feel on the bench.
+#   sound:  one of Bp1 Bp2 Bp3 Wrn1 Wrn2 Chee Rata Tick Sirn Ring SciF Robt
+#           Chrp Tada Crck Alrm
+#   track:  name of a .wav in SOUNDS/<lang>/ without the extension
+actions:
+  warning:
+    - {type: haptic, pattern: 0, repeat_s: 10}
+  alarm:
+    - {type: haptic, pattern: 2, repeat_s: 4}
+    - {type: sound,  name: Wrn1, repeat_s: 4}
+
+# The generator owns logical switches L1 (warning) and L2 (alarm) and every
+# special function from first_function_slot upward in the listed models.
+# Everything else in the file is left alone.
+models:
+  model01.yml:                # M-07R
+    first_function_slot: 3    # SF1-SF3 are trim -> gvar adjusters, keep them
+    replace_existing: true    # replaces the old "RxBt < 7.4 V" switch (L1) and
+                              # the PLAY_VALUE function on SF4
+  model02.yml:                # BD-8
+    first_function_slot: 0
+    replace_existing: false
+  # Add "profile: practice" under a model to override active_profile for it.
