@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Write battery warning/alarm logic into EdgeTX model files.
 
-Reads radio/MODELS/<name>.yml (a backup of the SD card), splices a two-stage RxBt
+Reads radio/MODELS/*.yml (a backup of the SD card), splices a two-stage RxBt
 alert into the logicalSw and customFn sections, and writes the result to
-build/MODELS/model<NN>.yml using the slots in radio/slots.yml. Only those two sections change; every other byte of the file,
+build/MODELS/. Only those two sections change; every other byte of the file,
 including the CRLF line endings the radio writes, is kept as is.
 
 Encodings were checked against EdgeTX source (radio/src/storage/yaml/
@@ -225,7 +225,6 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--config", type=Path, default=root / "alerts" / "alerts.yml")
     ap.add_argument("--src", type=Path, default=root / "radio" / "MODELS")
-    ap.add_argument("--slots", type=Path, default=root / "radio" / "slots.yml")
     ap.add_argument("--out", type=Path, default=root / "build" / "MODELS")
     ap.add_argument("--profile", help="override active_profile for every model")
     ap.add_argument("--dry-run", action="store_true", help="report only, write nothing")
@@ -237,16 +236,10 @@ def main(argv=None):
     if cfg["active_profile"] not in cfg["profiles"]:
         sys.exit(f"unknown profile {cfg['active_profile']!r}")
 
-    slots = yaml.safe_load(args.slots.read_text())
     failed = False
-    for slug, model_cfg in cfg["models"].items():
+    for fname, model_cfg in cfg["models"].items():
         model_cfg = model_cfg or {}
-        if slug not in slots:
-            print(f"{slug}: ERROR not listed in {args.slots}", file=sys.stderr)
-            failed = True
-            continue
-        fname = f"model{slots[slug]:02d}.yml"
-        src = args.src / f"{slug}.yml"
+        src = args.src / fname
         try:
             text = src.read_bytes().decode("utf-8")
             notes = []

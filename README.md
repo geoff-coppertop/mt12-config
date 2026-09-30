@@ -4,8 +4,7 @@ Backup of a RadioMaster MT12 (EdgeTX 2.11.3) SD card config, plus a generator
 for RxBt battery warning/alarm alerts on the two ER3C-i cars (M-07R and BD-8).
 
 ```
-radio/            copy of the card: MODELS/ (bronco, m-07r, bd-8), RADIO/radio.yml, version file
-radio/slots.yml   model name -> slot number; the radio needs MODELS/model<NN>.yml
+radio/            byte-exact copy of the card: MODELS/, RADIO/radio.yml, version file
 alerts/alerts.yml thresholds, profiles, actions, per-model settings
 alerts/gen_alerts.py  reads radio/MODELS, writes build/MODELS (gitignored)
 ```
@@ -18,7 +17,7 @@ adding any. `*.yml` is kept byte-exact because the radio writes CRLF.
 ## Back up
 
 Copy `MODELS/`, `RADIO/` and `edgetx.sdcard.version` from the card into
-`radio/`, renaming each `model<NN>.yml` to its name per `radio/slots.yml`, review `git diff`, commit. Do this **right before** generating: the
+`radio/`, review `git diff`, commit. Do this **right before** generating: the
 model files also hold trims and gvars (the M-07R adjusts gvars from trims), so
 an old backup would overwrite recent changes when copied back.
 
@@ -27,7 +26,7 @@ an old backup would overwrite recent changes when copied back.
 ```
 pip install pyyaml
 python3 alerts/gen_alerts.py --dry-run     # report only
-python3 alerts/gen_alerts.py               # writes build/MODELS/model01.yml and model02.yml
+python3 alerts/gen_alerts.py               # writes build/MODELS/model01.yml, model02.yml
 python3 alerts/gen_alerts.py --profile practice
 python3 -m unittest alerts.test_gen_alerts
 ```
