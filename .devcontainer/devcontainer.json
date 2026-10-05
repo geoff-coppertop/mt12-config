@@ -48,5 +48,6 @@
     "mounts": [
         "source=claude-code-state,target=/home/vscode/.claude,type=volume"
     ],
-    "privileged": true
+    "privileged": true,
+    "runArgs": ["--userns=keep-id"]
 }

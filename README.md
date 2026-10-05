@@ -20,9 +20,9 @@ adding any. `*.yml` is kept byte-exact because the radio writes CRLF.
 `.devcontainer/` gives a ready environment (Debian, uv, git-lfs, `gh`, fish, Claude Code),
 the same shape as helicopter-collective's. Open the folder in VS Code and choose
 "Reopen in Container"; `uv sync` runs on creation. It runs `privileged` so the
-container can see the card reader's block device (the same host-USB approach as
-helicopter-collective). Podman users who need the host UID can add `"runArgs": ["--userns=keep-id"]`;
-it is left out because Docker rejects it.
+container can see the card reader's block device, and uses `--userns=keep-id`, the
+same as helicopter-collective. That flag is Podman-only, so the devcontainer needs
+Podman (Docker refuses to start it).
 
 To sync the card from inside the container, mount it where `tools/card.py` looks
 (`/media/vscode/*`), or pass `--card`:
@@ -33,7 +33,7 @@ sudo mkdir -p /media/vscode/MT12 && sudo mount /dev/sdb1 /media/vscode/MT12
 uv run tools/card.py status
 ```
 
-Windows hosts: Docker Desktop and WSL2 do not expose a card reader as a block
+Windows hosts: Podman on WSL2 does not expose a card reader as a block
 device by default. Either attach it first with [usbipd-win](https://github.com/dorssel/usbipd-win)
 (`usbipd attach --wsl`), or run `tools/card.py` on the host and use the container for everything else.
 This is untested on all three hosts.
