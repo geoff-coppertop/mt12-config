@@ -15,6 +15,29 @@ Not tracked: `SCRIPTS/` (stock), `SOUNDS/` (stock pack), `LOGS/`, `SCREENSHOTS/`
 are routed through Git LFS by `.gitattributes`, so install `git-lfs` before
 adding any. `*.yml` is kept byte-exact because the radio writes CRLF.
 
+## Devcontainer
+
+`.devcontainer/` gives a ready environment (Debian, uv, git-lfs, `gh`, fish, Claude Code),
+the same shape as helicopter-collective's. Open the folder in VS Code and choose
+"Reopen in Container"; `uv sync` runs on creation. It runs `privileged` so the
+container can see the card reader's block device (the same host-USB approach as
+helicopter-collective). Podman users who need the host UID can add `"runArgs": ["--userns=keep-id"]`;
+it is left out because Docker rejects it.
+
+To sync the card from inside the container, mount it where `tools/card.py` looks
+(`/media/vscode/*`), or pass `--card`:
+
+```
+lsblk                                       # find the card, e.g. /dev/sdb1
+sudo mkdir -p /media/vscode/MT12 && sudo mount /dev/sdb1 /media/vscode/MT12
+uv run tools/card.py status
+```
+
+Windows hosts: Docker Desktop and WSL2 do not expose a card reader as a block
+device by default. Either attach it first with [usbipd-win](https://github.com/dorssel/usbipd-win)
+(`usbipd attach --wsl`), or run `tools/card.py` on the host and use the container for everything else.
+This is untested on all three hosts.
+
 ## Sync with the card
 
 `tools/card.py` reads from and writes to the card directly. It finds the card by
