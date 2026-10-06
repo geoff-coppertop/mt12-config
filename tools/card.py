@@ -6,7 +6,8 @@
   uv run tools/card.py push              build/MODELS -> card (you accept or reject each change)
 
 pull and push ask about every changed setting (y/n, like `git add -p`) when run in a
-terminal; --all takes everything without asking.
+terminal; --all takes everything without asking. card.yml can turn the questions off per
+command (see README); status always shows the diff.
 
 The card is found automatically (Windows drive letters, WSL /mnt/<letter>, Linux
 /media and /run/media). Override with --card PATH or the MT12_CARD variable.
@@ -35,6 +36,25 @@ BOARD = "mt12"
 
 class CardError(Exception):
     pass
+
+
+# --------------------------------------------------------------------- config
+
+CONFIG = ROOT / "card.yml"
+
+
+def review_enabled(command: str, config: Path = CONFIG) -> bool:
+    """Whether `command` asks about each change. Set `review: {pull: false}` in card.yml to skip it."""
+    try:
+        import yaml
+        data = yaml.safe_load(config.read_text()) or {}
+        setting = (data.get("review") or {}).get(command, True)
+    except OSError:
+        return True
+    except Exception as exc:  # bad YAML or wrong shape: ask rather than silently overwrite
+        print(f"warning: ignoring {config.name}: {exc}", file=sys.stderr)
+        return True
+    return setting is not False
 
 
 # ------------------------------------------------------------------ discovery
@@ -307,6 +327,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-push", action="store_true", help="pull: commit but do not push to GitHub")
     ap.add_argument("--force", action="store_true", help="push: overwrite even if the card is out of sync")
     ap.add_argument("--all", action="store_true", help="pull/push: take every change without asking")
+    ap.add_argument("--review", action="store_true", help="pull/push: ask even if card.yml turns review off")
     ap.add_argument("--dry-run", action="store_true", help="push: show what would be written")
     args = ap.parse_args(argv)
     try:
@@ -314,7 +335,8 @@ def main(argv=None) -> int:
         radio = ROOT / "radio"
         if args.command == "status":
             return cmd_status(card, radio)
-        interactive = sys.stdin.isatty() and not args.all
+        wanted = args.review or review_enabled(args.command)
+        interactive = sys.stdin.isatty() and not args.all and wanted
         if args.command == "pull":
             session = review.Session(("radio/", "card")) if interactive else None
             return cmd_pull(card, radio, not args.no_git, not args.no_push, session=session)

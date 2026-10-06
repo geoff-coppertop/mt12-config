@@ -148,5 +148,17 @@ class ReviewTests(CardTests):
         self.assertEqual((self.card / "MODELS" / "model01.yml").read_bytes(), card_side.replace(b"weight: 100", b"weight: 70"))
 
 
+class ConfigTests(unittest.TestCase):
+    def test_review_enabled_per_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "card.yml"
+            self.assertTrue(c.review_enabled("pull", cfg))  # no file: ask
+            cfg.write_text("review:\n  pull: false\n")
+            self.assertFalse(c.review_enabled("pull", cfg))
+            self.assertTrue(c.review_enabled("push", cfg))
+            cfg.write_text("review: [oops\n")
+            self.assertTrue(c.review_enabled("pull", cfg))  # unreadable: ask
+
+
 if __name__ == "__main__":
     unittest.main()

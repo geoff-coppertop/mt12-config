@@ -36,7 +36,17 @@ those same changes in a terminal and ask `y`/`n` for each, like `git add -p`
 (`a` take the rest of the file, `r` reject it, `A`/`N` all/none of the remaining files,
 `q` quit without writing). Only accepted changes are spliced in, so the files stay
 byte-exact. On `push`, trims or gvars changed on the card show up as changes you can
-reject to keep. `--all` skips the questions. Mixes inserted in the middle of a list
+reject to keep. `--all` skips the questions for one run. To turn them off for good, per command, put
+this in `card.yml` at the repo root (`--review` asks anyway; `status` always shows the diff):
+
+```yaml
+review:
+  pull: false   # take everything from the card without asking
+  push: true
+```
+
+Turning review off for `push` is the same as `--all`: the refusals for unbacked card
+changes and a stale `build/` still apply (`--force` overrides them). Mixes inserted in the middle of a list
 may be shown as a block of line changes.
 
 `pull` options: `--no-push` (commit only), `--no-git` (copy only). It does nothing
