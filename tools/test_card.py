@@ -104,5 +104,49 @@ class CardTests(unittest.TestCase):
         self.assertEqual(blob, b"b: 3\r\n")  # CRLF survived autocrlf
 
 
+MODEL = b"trimInc: -1\r\nmixData: \r\n -\r\n   destCh: 0\r\n   weight: 100\r\n -\r\n   destCh: 1\r\n   weight: 100\r\n"
+
+
+def scripted(*answers):
+    it = iter(answers)
+    return c.review.Session(color=False, ask=lambda _q: next(it), out=lambda *_a: None)
+
+
+class ReviewTests(CardTests):
+    def test_diff_names_the_setting(self):
+        new = MODEL.replace(b"weight: 100\r\n -\r\n   destCh: 1", b"weight: 80\r\n -\r\n   destCh: 1")
+        self.assertEqual([ch.path for ch in c.review.diff(MODEL, new)], ["mixData[0].weight"])
+
+    def test_pull_takes_only_accepted_changes_and_keeps_crlf(self):
+        write(self.radio / "MODELS" / "model01.yml", MODEL)
+        card_side = MODEL.replace(b"trimInc: -1", b"trimInc: 3").replace(b"weight: 100", b"weight: 80")
+        write(self.card / "MODELS" / "model01.yml", card_side)
+        # changes: trimInc, mixData[0].weight, mixData[1].weight -> take 1st and 3rd
+        c.cmd_pull(self.card, self.radio, use_git=False, push=False, root=self.root, session=scripted("y", "n", "y"))
+        got = (self.radio / "MODELS" / "model01.yml").read_bytes()
+        self.assertEqual(got, MODEL.replace(b"trimInc: -1", b"trimInc: 3").replace(
+            b"destCh: 1\r\n   weight: 100", b"destCh: 1\r\n   weight: 80"))
+
+    def test_pull_accept_all_is_byte_exact_and_quit_writes_nothing(self):
+        write(self.radio / "MODELS" / "model01.yml", MODEL)
+        card_side = MODEL.replace(b"trimInc: -1", b"trimInc: 3")
+        write(self.card / "MODELS" / "model01.yml", card_side)
+        self.assertEqual(c.cmd_pull(self.card, self.radio, False, False, self.root, session=scripted("q")), 1)
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), MODEL)
+        c.cmd_pull(self.card, self.radio, False, False, self.root, session=scripted("A"))
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), card_side)
+
+    def test_push_review_can_keep_card_trim(self):
+        write(self.radio / "MODELS" / "model01.yml", MODEL)
+        card_side = MODEL.replace(b"trimInc: -1", b"trimInc: 3")  # trimmed at the track, not backed up
+        write(self.card / "MODELS" / "model01.yml", card_side)
+        gen = MODEL.replace(b"weight: 100", b"weight: 70")
+        write(self.build / "model01.yml", gen, mtime=time.time() + 5)
+        write(self.build / "model02.yml", b"b: 2\r\n", mtime=time.time() + 5)
+        # changes vs card: trimInc (reject), mix weights (accept both)
+        self.assertEqual(c.cmd_push(self.card, self.radio, self.build, False, False, session=scripted("n", "y", "y")), 0)
+        self.assertEqual((self.card / "MODELS" / "model01.yml").read_bytes(), card_side.replace(b"weight: 100", b"weight: 70"))
+
+
 if __name__ == "__main__":
     unittest.main()

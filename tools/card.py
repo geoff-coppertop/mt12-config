@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Sync the MT12 SD card with this repo: back up from the card, push generated models to it.
 
-  uv run tools/card.py status            what differs between card and radio/
-  uv run tools/card.py pull              card -> radio/, then commit and push to GitHub
-  uv run tools/card.py push              build/MODELS -> card (refuses if the card has unbacked changes)
+  uv run tools/card.py status            setting-by-setting diff between card and radio/
+  uv run tools/card.py pull              card -> radio/ (you accept or reject each change), commit, push
+  uv run tools/card.py push              build/MODELS -> card (you accept or reject each change)
+
+pull and push ask about every changed setting (y/n, like `git add -p`) when run in a
+terminal; --all takes everything without asking.
 
 The card is found automatically (Windows drive letters, WSL /mnt/<letter>, Linux
 /media and /run/media). Override with --card PATH or the MT12_CARD variable.
@@ -23,6 +26,10 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools import review  # noqa: E402
 BOARD = "mt12"
 
 
@@ -116,6 +123,34 @@ def copy_bytes(src: Path, dst: Path) -> None:
         raise CardError(f"verification failed after writing {dst}")
 
 
+def write_bytes(data: bytes, dst: Path) -> None:
+    """Write exactly and flush to disk, then verify by reading back."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    if dst.read_bytes() != data:
+        raise CardError(f"verification failed after writing {dst}")
+
+
+def review_file(rel: Path, dest: Path, src: Path, session) -> bytes | None:
+    """Ask which changes to take from `src` into `dest`; None if nothing changes."""
+    new = src.read_bytes()
+    old = dest.read_bytes() if dest.exists() else None
+    if old == new:
+        return None
+    if old is None:
+        changes = [review.Change("(whole file is new)", (0, 0), (0, len(review.split_lines(new))))]
+        old = b""
+    else:
+        changes = review.diff(old, new)
+    accepted = session.review(rel.as_posix(), old, new, changes)
+    if not accepted:
+        return None
+    return review.apply(old, new, changes, accepted)
+
+
 def diff(card: Path, repo_radio: Path):
     """Return (changed, only_card, only_repo) as lists of relative paths."""
     on_card, in_repo = set(tracked_files(card)), set(tracked_files(repo_radio))
@@ -128,7 +163,12 @@ def diff(card: Path, repo_radio: Path):
 def cmd_status(card: Path, radio: Path) -> int:
     changed, only_card, only_repo = diff(card, radio)
     print(f"card: {card}")
-    for label, items in (("differs from radio/", changed), ("only on card", only_card), ("only in radio/", only_repo)):
+    names = ("radio/", "card")
+    for p in changed:
+        review.show_only(p.as_posix(), (radio / p).read_bytes(), (card / p).read_bytes(),
+                         review.diff((radio / p).read_bytes(), (card / p).read_bytes()), names)
+        print()
+    for label, items in (("only on card", only_card), ("only in radio/", only_repo)):
         for p in items:
             print(f"  {label}: {p}")
     if not (changed or only_card or only_repo):
@@ -140,9 +180,26 @@ def git(*args, root=ROOT):
     return subprocess.run(["git", "-C", str(root), *args], text=True, capture_output=True)
 
 
-def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = ROOT) -> int:
-    for rel in tracked_files(card):
-        copy_bytes(card / rel, radio / rel)
+def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = ROOT, session=None) -> int:
+    partial = False
+    if session is None:
+        for rel in tracked_files(card):
+            copy_bytes(card / rel, radio / rel)
+    else:
+        results = {}
+        try:
+            for rel in tracked_files(card):
+                data = review_file(rel, radio / rel, card / rel, session)
+                if data is not None:
+                    results[rel] = data
+        except review.ReviewAbort:
+            print("\nabandoned; nothing was written")
+            return 1
+        for rel, data in results.items():
+            write_bytes(data, radio / rel)
+        left = diff(card, radio)
+        partial = bool(left[0] or [p for p in left[1]])
+        print(f"\nwrote {len(results)} file(s) into radio/" + ("; some changes left on the card only" if partial else ""))
     _, _, only_repo = diff(card, radio)
     for p in only_repo:
         print(f"note: {p} is in radio/ but not on the card (left in place)")
@@ -154,7 +211,7 @@ def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = RO
         print("no changes since the last backup")
         return 0
     stamp = time.strftime("%Y-%m-%d %H:%M")
-    res = git("commit", "-m", f"Backup from card {stamp}", root=root)
+    res = git("commit", "-m", f"{'Partial backup' if partial else 'Backup'} from card {stamp}", root=root)
     if res.returncode:
         print(res.stderr or res.stdout, file=sys.stderr)
         return 1
@@ -168,7 +225,7 @@ def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = RO
     return 0
 
 
-def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, root: Path = ROOT) -> int:
+def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, root: Path = ROOT, session=None) -> int:
     files = sorted(p.relative_to(build.parent) for p in build.glob("model*.yml"))
     if not files:
         raise CardError(f"nothing to push: no model*.yml in {build}")
@@ -193,12 +250,35 @@ def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, r
     stale = [rel for rel in files if (build.parent / rel).stat().st_mtime < newest_radio]
     if stale:
         problems.append("build/ is older than radio/ for " + ", ".join(map(str, stale)) + "; regenerate first")
-    if problems and not force:
-        for p in problems:
+    # When reviewing, card-only edits are no longer a hard stop: they show up as changes
+    # you can reject to keep the card's value. A stale build still stops the push.
+    reviewing = session is not None and not dry_run
+    blocking = [p for p in problems if p.startswith("build/")] if reviewing else problems
+    if blocking and not force:
+        for p in blocking:
             print("refusing: " + p, file=sys.stderr)
         print("run `card.py pull` (and regenerate), or use --force", file=sys.stderr)
         return 2
+    if reviewing:
+        for p in problems:
+            if p not in blocking:
+                print("warning: " + p, file=sys.stderr)
+        results = {}
+        try:
+            for rel in files:
+                data = review_file(rel, card / rel, build.parent / rel, session)
+                if data is not None:
+                    results[rel] = data
+        except review.ReviewAbort:
+            print("\nabandoned; nothing was written")
+            return 1
+        files = sorted(results)
+    else:
+        results = None
 
+    if results is not None and not files:
+        print("nothing to write")
+        return 0
     saved = build.parent / "previous" / time.strftime("%Y%m%d-%H%M%S")
     for rel in files:
         if dry_run:
@@ -206,7 +286,10 @@ def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, r
             continue
         if (card / rel).exists():
             copy_bytes(card / rel, saved / rel)
-        copy_bytes(build.parent / rel, card / rel)
+        if results is not None:
+            write_bytes(results[rel], card / rel)
+        else:
+            copy_bytes(build.parent / rel, card / rel)
         last_push[rel.as_posix()] = digest(card / rel)
         print(f"wrote {card / rel}")
     if not dry_run:
@@ -223,6 +306,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-git", action="store_true", help="pull: copy only, no commit")
     ap.add_argument("--no-push", action="store_true", help="pull: commit but do not push to GitHub")
     ap.add_argument("--force", action="store_true", help="push: overwrite even if the card is out of sync")
+    ap.add_argument("--all", action="store_true", help="pull/push: take every change without asking")
     ap.add_argument("--dry-run", action="store_true", help="push: show what would be written")
     args = ap.parse_args(argv)
     try:
@@ -230,9 +314,12 @@ def main(argv=None) -> int:
         radio = ROOT / "radio"
         if args.command == "status":
             return cmd_status(card, radio)
+        interactive = sys.stdin.isatty() and not args.all
         if args.command == "pull":
-            return cmd_pull(card, radio, not args.no_git, not args.no_push)
-        return cmd_push(card, radio, ROOT / "build" / "MODELS", args.force, args.dry_run)
+            session = review.Session(("radio/", "card")) if interactive else None
+            return cmd_pull(card, radio, not args.no_git, not args.no_push, session=session)
+        session = review.Session(("card", "generated")) if interactive else None
+        return cmd_push(card, radio, ROOT / "build" / "MODELS", args.force, args.dry_run, session=session)
     except (CardError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
