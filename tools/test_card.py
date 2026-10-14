@@ -127,6 +127,16 @@ class ReviewTests(CardTests):
         self.assertEqual(got, MODEL.replace(b"trimInc: -1", b"trimInc: 3").replace(
             b"destCh: 1\r\n   weight: 100", b"destCh: 1\r\n   weight: 80"))
 
+    def test_checksum_and_timer_are_never_asked_about(self):
+        old = b"checksum: 1\r\nglobalTimer: 10\r\na: 1\r\n"
+        write(self.radio / "MODELS" / "model01.yml", old)
+        write(self.card / "MODELS" / "model01.yml", b"checksum: 2\r\nglobalTimer: 11\r\na: 1\r\n")
+        c.cmd_pull(self.card, self.radio, False, False, self.root, session=scripted())  # would raise if asked
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), old)
+        write(self.card / "MODELS" / "model01.yml", b"checksum: 2\r\nglobalTimer: 11\r\na: 5\r\n")
+        c.cmd_pull(self.card, self.radio, False, False, self.root, session=scripted("y"))
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), b"checksum: 2\r\nglobalTimer: 11\r\na: 5\r\n")
+
     def test_pull_accept_all_is_byte_exact_and_quit_writes_nothing(self):
         write(self.radio / "MODELS" / "model01.yml", MODEL)
         card_side = MODEL.replace(b"trimInc: -1", b"trimInc: 3")

@@ -36,7 +36,7 @@ those same changes in a terminal and ask `y`/`n` for each, like `git add -p`
 (`a` take the rest of the file, `r` reject it, `A`/`N` all/none of the remaining files,
 `q` quit without writing). Only accepted changes are spliced in, so the files stay
 byte-exact. On `push`, trims or gvars changed on the card show up as changes you can
-reject to keep. `--all` skips the questions for one run. To turn them off for good, per command, put
+reject to keep. `checksum` and `globalTimer` in `radio.yml` are rewritten by the radio itself, so they are never asked about: they come along when you accept any other change in that file, and a file where only they differ counts as unchanged. `--all` skips the questions for one run. To turn them off for good, per command, put
 this in `card.yml` at the repo root (`--review` asks anyway; `status` always shows the diff):
 
 ```yaml

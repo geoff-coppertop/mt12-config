@@ -18,6 +18,11 @@ import yaml
 CONTEXT_KEYS = ("name", "destCh", "chn", "srcRaw", "swtch")
 
 
+# Values the radio rewrites on its own; never worth asking about. They ride along with
+# real changes (checksum has to match the rest of the file) and are ignored on their own.
+NOISE = frozenset({"checksum", "globalTimer"})
+
+
 class ReviewAbort(Exception):
     pass
 
@@ -28,6 +33,10 @@ class Change:
     dest: tuple[int, int]   # lines [lo, hi) replaced in the destination
     src: tuple[int, int]    # lines [lo, hi) taken from the source
     context: str = ""
+
+    @property
+    def noise(self) -> bool:
+        return self.path in NOISE
 
     @property
     def kind(self) -> str:
@@ -184,6 +193,10 @@ def diff(dest: bytes, src: bytes) -> list[Change]:
         return _hunks(dl, sl)
 
 
+def significant(changes: list[Change]) -> list[Change]:
+    return [c for c in changes if not c.noise]
+
+
 def apply(dest: bytes, src: bytes, changes: list[Change], accepted: set[int]) -> bytes:
     """Splice the accepted changes into `dest`, keeping all other bytes."""
     if len(accepted) == len(changes) and changes:
@@ -256,12 +269,16 @@ class Session:
     def review(self, label: str, dest: bytes, src: bytes, changes: list[Change]) -> set[int]:
         dl, sl = split_lines(dest), split_lines(src)
         self.out("")
-        self.out(self.st.cyan(f"{label}") + f"  {len(changes)} change{'s' * (len(changes) != 1)}"
+        n = len(significant(changes))
+        self.out(self.st.cyan(f"{label}") + f"  {n} change{'s' * (n != 1)}"
                  + self.st.dim(f"   - {self.names[0]}   + {self.names[1]}"))
         accepted: set[int] = set()
+        noise = {i for i, c in enumerate(changes) if c.noise}
         sticky = None  # 'y' / 'n' once the user chose "rest of this file"
-        for i, c in enumerate(changes):
-            render(c, dl, sl, self.names, self.st, self.out, i + 1, len(changes))
+        real = [i for i in range(len(changes)) if i not in noise]
+        for n, i in enumerate(real):
+            c = changes[i]
+            render(c, dl, sl, self.names, self.st, self.out, n + 1, len(real))
             if self.auto:
                 take = self.auto == "A"
             elif sticky:
@@ -276,6 +293,8 @@ class Session:
             if take:
                 accepted.add(i)
             self.out(self.st.green("    accepted") if take else self.st.red("    rejected"))
+        if accepted:
+            accepted |= noise
         return accepted
 
     def _prompt(self) -> str:
@@ -295,6 +314,7 @@ class Session:
 
 def show_only(label, dest, src, changes, names, out=print, color=None):
     st = Style(sys.stdout.isatty() if color is None else color)
+    changes = significant(changes)
     dl, sl = split_lines(dest), split_lines(src)
     out(st.cyan(label) + f"  {len(changes)} change{'s' * (len(changes) != 1)}"
         + st.dim(f"   - {names[0]}   + {names[1]}"))

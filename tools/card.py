@@ -160,6 +160,8 @@ def review_file(rel: Path, dest: Path, src: Path, session) -> bytes | None:
     old = dest.read_bytes() if dest.exists() else None
     if old == new:
         return None
+    if old is not None and not review.significant(review.diff(old, new)):
+        return None  # only checksum / timer noise
     if old is None:
         changes = [review.Change("(whole file is new)", (0, 0), (0, len(review.split_lines(new))))]
         old = b""
@@ -182,6 +184,7 @@ def diff(card: Path, repo_radio: Path):
 
 def cmd_status(card: Path, radio: Path) -> int:
     changed, only_card, only_repo = diff(card, radio)
+    changed = [p for p in changed if review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))]
     print(f"card: {card}")
     names = ("radio/", "card")
     for p in changed:
@@ -204,6 +207,9 @@ def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = RO
     partial = False
     if session is None:
         for rel in tracked_files(card):
+            if (radio / rel).exists() and not review.significant(
+                    review.diff((radio / rel).read_bytes(), (card / rel).read_bytes())):
+                continue  # identical, or only checksum / timer noise
             copy_bytes(card / rel, radio / rel)
     else:
         results = {}
@@ -218,7 +224,8 @@ def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = RO
         for rel, data in results.items():
             write_bytes(data, radio / rel)
         left = diff(card, radio)
-        partial = bool(left[0] or [p for p in left[1]])
+        partial = any(review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))
+                      for p in left[0]) or bool(left[1])
         print(f"\nwrote {len(results)} file(s) into radio/" + ("; some changes left on the card only" if partial else ""))
     _, _, only_repo = diff(card, radio)
     for p in only_repo:
