@@ -196,6 +196,52 @@ def diff(dest: bytes, src: bytes) -> list[Change]:
         return _hunks(dl, sl)
 
 
+def _load(blob: bytes) -> dict:
+    try:
+        data = yaml.safe_load(blob)
+        return data if isinstance(data, dict) else {}
+    except yaml.YAMLError:
+        return {}
+
+
+LS_OPS = {"FUNC_VPOS": ">", "FUNC_VNEG": "<", "FUNC_VEQUAL": "=", "FUNC_VALMOSTEQUAL": "~",
+          "FUNC_VLESS": "<=", "FUNC_VGREATER": ">="}
+
+
+def _describe_ls(n: int, item: dict, sensors: dict, path: str) -> str:
+    """`L1: RxBt < 7.0 V` for a logical switch that compares a sensor with a number."""
+    m = re.fullmatch(r"tele\((\d+)\),(-?\d+)", str(item.get("def", "")))
+    op = LS_OPS.get(str(item.get("func", "")))
+    if not (m and op):
+        return f"L{n}"
+    sensor = sensors.get(int(m[1]), {})
+    label = sensor.get("label", f"sensor {m[1]}")
+    prec = int(sensor.get("prec", 0) or 0)
+    value = int(m[2]) / (10 ** prec) if prec else int(m[2])
+    text = f"{value:.{prec}f}" + (" V" if sensor.get("unit") == 1 else "")
+    out = f"L{n}: {label} {op} {text}"
+    andsw = str(item.get("andsw", "NONE"))
+    if andsw not in ("NONE", ""):
+        out += " and not " + andsw[1:] if andsw.startswith("!") else f" and {andsw}"
+    return out
+
+
+def _describe_sf(n: int, item: dict, gvar) -> str:
+    """`SF5: haptic when L2` / `SF1: adjust Str from T2`."""
+    func, swtch, args = str(item.get("func", "")), str(item.get("swtch", "")), str(item.get("def", "")).split(",")
+    if func == "ADJUST_GVAR" and len(args) >= 3 and args[0].isdigit():
+        action = f"adjust {gvar(int(args[0]))} from {args[2]}"
+    elif func == "PLAY_SOUND":
+        action = f"play {args[0]}"
+    elif func == "PLAY_VALUE":
+        action = "speak a value"
+    elif func:
+        action = func.lower().replace("_", " ")
+    else:
+        return f"SF{n}"
+    return f"SF{n}: {action}" + (f" when {swtch}" if swtch not in ("", "ON") else "")
+
+
 def _titles(changes: list[Change], dest: bytes, src: bytes) -> None:
     """Give changes a readable title, e.g. `BrW` for flightModeData.0.gvars.3.val."""
     names: dict[int, str] = {}
@@ -209,15 +255,24 @@ def _titles(changes: list[Change], dest: bytes, src: bytes) -> None:
     def gvar(i: int) -> str:
         return names.get(i, f"GV{i + 1}")
 
+    docs = [_load(dest), _load(src)]
+    sensors = {}
+    for d in docs:  # src last
+        for i, s in (d.get("telemetrySensors") or {}).items():
+            if isinstance(s, dict) and s.get("label"):
+                sensors[int(i)] = s
+
     for c in changes:
         m = re.fullmatch(r"flightModeData\.(\d+)\.gvars\.(\d+)\.val", c.path)
         if m:
             c.title = gvar(int(m[2])) + (f" (flight mode {m[1]})" if m[1] != "0" else "")
             continue
-        m = re.fullmatch(r"(logicalSw|customFn)\.(\d+)(?:\.(\w+))?", c.path)
+        m = re.fullmatch(r"(logicalSw|customFn)\.(\d+)(?:\.\w+)?", c.path)
         if m:
-            label = ("logical switch L" if m[1] == "logicalSw" else "special function SF") + str(int(m[2]) + 1)
-            c.title = label + (f" {m[3]}" if m[3] else "")
+            item = (docs[1].get(m[1]) or {}).get(int(m[2])) or (docs[0].get(m[1]) or {}).get(int(m[2])) or {}
+            n = int(m[2]) + 1
+            c.title = (_describe_ls(n, item, sensors, c.path) if m[1] == "logicalSw"
+                       else _describe_sf(n, item, gvar))
             continue
         m = re.fullmatch(r"gvars\.(\d+)(?:\.(\w+))?", c.path)
         if m:

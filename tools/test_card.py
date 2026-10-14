@@ -157,6 +157,14 @@ class ReviewTests(CardTests):
             c.cmd_status(self.card, self.radio, self.build)
         self.assertIn("pull` first", buf.getvalue())
 
+    def test_logical_switches_and_functions_are_described(self):
+        base = (b"telemetrySensors: \r\n   10:\r\n      label: \"RxBt\"\r\n      unit: 1\r\n      prec: 1\r\n"
+                b"logicalSw: \r\n   0:\r\n      func: FUNC_VNEG\r\n      def: \"tele(10),70\"\r\n      andsw: \"NONE\"\r\n"
+                b"customFn: \r\n   0:\r\n      swtch: \"L1\"\r\n      func: HAPTIC\r\n      def: \"0,1,10\"\r\n")
+        new = base.replace(b"70", b"66").replace(b"0,1,10", b"0,1,20")
+        self.assertEqual(sorted(ch.title for ch in c.review.diff(base, new)),
+                         ["L1: RxBt < 6.6 V", "SF1: haptic when L1"])
+
     def test_gvar_changes_are_named(self):
         old = (b"flightModeData: \r\n   0:\r\n      gvars: \r\n         3:\r\n            val: 34\r\n"
                b"gvars: \r\n   3:\r\n      name: \"BrW\"\r\n      max: 924\r\n")
