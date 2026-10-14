@@ -117,6 +117,25 @@ class ReviewTests(CardTests):
         new = MODEL.replace(b"weight: 100\r\n -\r\n   destCh: 1", b"weight: 80\r\n -\r\n   destCh: 1")
         self.assertEqual([ch.path for ch in c.review.diff(MODEL, new)], ["mixData[0].weight"])
 
+    def test_adjacent_inserts_keep_their_order(self):
+        old = b"a: 1\r\nl: \r\n -\r\n   x: 1\r\n"
+        new = old + b" -\r\n   x: 2\r\n -\r\n   x: 3\r\n"
+        ch = c.review.diff(old, new)
+        self.assertEqual([x.path for x in ch], ["l[1]", "l[2]"])
+        self.assertEqual(c.review.apply(old, new, ch, {0, 1}), new)
+
+    def test_status_shows_generated_changes_not_yet_on_the_card(self):
+        import contextlib, io
+        write(self.build / "model01.yml", b"a: 2\r\n")
+        write(self.build / "model02.yml", b"b: 2\r\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            c.cmd_status(self.card, self.radio, self.build)
+        out = buf.getvalue()
+        self.assertIn("not on the radio yet", out)
+        self.assertIn("MODELS/model01.yml", out)
+        self.assertNotIn("model02.yml  1 change", out)  # identical to the card
+
     def test_gvar_changes_are_named(self):
         old = (b"flightModeData: \r\n   0:\r\n      gvars: \r\n         3:\r\n            val: 34\r\n"
                b"gvars: \r\n   3:\r\n      name: \"BrW\"\r\n      max: 924\r\n")

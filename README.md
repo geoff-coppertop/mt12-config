@@ -30,7 +30,7 @@ uv run tools/card.py pull       # card -> radio/, commit "Backup from card <time
 uv run tools/card.py push       # build/MODELS -> card
 ```
 
-`status` shows what changed setting by setting (`mixData[2].weight`, `trimInc`), with
+`status` has two parts: what is on the radio but not yet backed up (what `pull` would take), and what the generated `build/MODELS` would change on the card (what `push` would do; run `alerts/gen_alerts.py` first so `build/` is current). It shows what changed setting by setting (`mixData[2].weight`, `trimInc`), with
 the `computer` value (the copy in `radio/`) in red (`-`) and the `radio` value (from the card) in green (`+`). On `push` it is the other way round: `radio` is the card's current file, `computer` is the generated one. `pull` and `push` walk through
 those same changes in a terminal and ask `y`/`n` for each, like `git add -p`
 (`a` take the rest of the file, `r` reject it, `A`/`N` all/none of the remaining files,

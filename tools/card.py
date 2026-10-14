@@ -182,11 +182,13 @@ def diff(card: Path, repo_radio: Path):
 
 # ------------------------------------------------------------------- commands
 
-def cmd_status(card: Path, radio: Path) -> int:
+def cmd_status(card: Path, radio: Path, build: Path | None = None) -> int:
     changed, only_card, only_repo = diff(card, radio)
     changed = [p for p in changed if review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))]
     print(f"card: {card}")
     names = ("computer", "radio")
+    if changed:
+        print("on the radio but not backed up (what `pull` would take; - computer, + radio):")
     for p in changed:
         review.show_only(p.as_posix(), (radio / p).read_bytes(), (card / p).read_bytes(),
                          review.diff((radio / p).read_bytes(), (card / p).read_bytes()), names)
@@ -196,7 +198,35 @@ def cmd_status(card: Path, radio: Path) -> int:
             print(f"  {label}: {p}")
     if not (changed or only_card or only_repo):
         print("  card and radio/ are identical")
+    if build is not None:
+        status_build(card, build)
     return 0
+
+
+def status_build(card: Path, build: Path) -> int | None:
+    """Show what `push` would change: generated files in build/ against the card."""
+    files = sorted(p.relative_to(build.parent) for p in build.glob("model*.yml"))
+    print()
+    if not files:
+        print("generated (build/MODELS): nothing there; run alerts/gen_alerts.py to see what push would add")
+        return None
+    names, shown = ("radio", "computer"), 0
+    print("not on the radio yet (what `push` would change; - radio, + computer):")
+    for rel in files:
+        src = (build.parent / rel).read_bytes()
+        if not (card / rel).exists():
+            print(f"  {rel.as_posix()}: new file, not on the card")
+            shown += 1
+            continue
+        dest = (card / rel).read_bytes()
+        changes = review.diff(dest, src)
+        if review.significant(changes):
+            review.show_only(rel.as_posix(), dest, src, changes, names)
+            print()
+            shown += 1
+    if not shown:
+        print("  generated files match the card")
+    return shown
 
 
 def git(*args, root=ROOT):
@@ -341,7 +371,7 @@ def main(argv=None) -> int:
         card = find_card(args.card)
         radio = ROOT / "radio"
         if args.command == "status":
-            return cmd_status(card, radio)
+            return cmd_status(card, radio, ROOT / "build" / "MODELS")
         wanted = args.review or review_enabled(args.command)
         interactive = sys.stdin.isatty() and not args.all and wanted
         if args.command == "pull":

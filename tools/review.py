@@ -213,6 +213,11 @@ def _titles(changes: list[Change], dest: bytes, src: bytes) -> None:
         if m:
             c.title = gvar(int(m[2])) + (f" (flight mode {m[1]})" if m[1] != "0" else "")
             continue
+        m = re.fullmatch(r"(logicalSw|customFn)\.(\d+)(?:\.(\w+))?", c.path)
+        if m:
+            label = ("logical switch L" if m[1] == "logicalSw" else "special function SF") + str(int(m[2]) + 1)
+            c.title = label + (f" {m[3]}" if m[3] else "")
+            continue
         m = re.fullmatch(r"gvars\.(\d+)(?:\.(\w+))?", c.path)
         if m:
             c.title = f"gvar {gvar(int(m[1]))}" + (f" {m[2]}" if m[2] else "")
@@ -230,7 +235,7 @@ def apply(dest: bytes, src: bytes, changes: list[Change], accepted: set[int]) ->
         edits = sorted(accepted)
     dl, sl = split_lines(dest), split_lines(src)
     out = list(dl)
-    for i in sorted(edits, key=lambda k: (changes[k].dest[0], changes[k].dest[1]), reverse=True):
+    for i in sorted(edits, key=lambda k: (changes[k].dest[0], changes[k].dest[1], k), reverse=True):
         c = changes[i]
         new = sl[c.src[0]:c.src[1]]
         if new and out[c.dest[0]:c.dest[1]] == [] and c.dest[0] > 0 and not out[c.dest[0] - 1].endswith("\n"):
