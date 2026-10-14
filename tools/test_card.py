@@ -117,6 +117,12 @@ class ReviewTests(CardTests):
         new = MODEL.replace(b"weight: 100\r\n -\r\n   destCh: 1", b"weight: 80\r\n -\r\n   destCh: 1")
         self.assertEqual([ch.path for ch in c.review.diff(MODEL, new)], ["mixData[0].weight"])
 
+    def test_gvar_changes_are_named(self):
+        old = (b"flightModeData: \r\n   0:\r\n      gvars: \r\n         3:\r\n            val: 34\r\n"
+               b"gvars: \r\n   3:\r\n      name: \"BrW\"\r\n      max: 924\r\n")
+        new = old.replace(b"val: 34", b"val: 38").replace(b"max: 924", b"max: 900")
+        self.assertEqual(sorted(ch.title for ch in c.review.diff(old, new)), ["BrW", "gvar BrW max"])
+
     def test_pull_takes_only_accepted_changes_and_keeps_crlf(self):
         write(self.radio / "MODELS" / "model01.yml", MODEL)
         card_side = MODEL.replace(b"trimInc: -1", b"trimInc: 3").replace(b"weight: 100", b"weight: 80")

@@ -33,6 +33,7 @@ class Change:
     dest: tuple[int, int]   # lines [lo, hi) replaced in the destination
     src: tuple[int, int]    # lines [lo, hi) taken from the source
     context: str = ""
+    title: str = ""   # friendlier name than the path, when we can work one out
 
     @property
     def noise(self) -> bool:
@@ -188,9 +189,33 @@ def diff(dest: bytes, src: bytes) -> list[Change]:
             raise ValueError("splice mismatch")
         if not changes:  # parsed equal but bytes differ (formatting only)
             return _hunks(dl, sl)
+        _titles(changes, dest, src)
         return changes
     except (yaml.YAMLError, ValueError, UnicodeDecodeError, IndexError):
         return _hunks(dl, sl)
+
+
+def _titles(changes: list[Change], dest: bytes, src: bytes) -> None:
+    """Give changes a readable title, e.g. `BrW` for flightModeData.0.gvars.3.val."""
+    names: dict[int, str] = {}
+    for blob in (dest, src):  # src last so a renamed gvar shows its new name
+        try:
+            gv = (yaml.safe_load(blob) or {}).get("gvars") or {}
+            names.update({int(i): str(v["name"]) for i, v in gv.items() if v.get("name")})
+        except (yaml.YAMLError, AttributeError, TypeError, ValueError, KeyError):
+            pass
+
+    def gvar(i: int) -> str:
+        return names.get(i, f"GV{i + 1}")
+
+    for c in changes:
+        m = re.fullmatch(r"flightModeData\.(\d+)\.gvars\.(\d+)\.val", c.path)
+        if m:
+            c.title = gvar(int(m[2])) + (f" (flight mode {m[1]})" if m[1] != "0" else "")
+            continue
+        m = re.fullmatch(r"gvars\.(\d+)(?:\.(\w+))?", c.path)
+        if m:
+            c.title = f"gvar {gvar(int(m[1]))}" + (f" {m[2]}" if m[2] else "")
 
 
 def significant(changes: list[Change]) -> list[Change]:
@@ -235,6 +260,8 @@ MAX_SHOWN = 12
 
 def _show(lines, prefix, paint, out):
     shown = lines[:MAX_SHOWN]
+    indent = min((len(ln) - len(ln.lstrip(" ")) for ln in shown if ln.strip()), default=0)
+    shown = [ln[indent:] if ln.strip() else ln for ln in shown]
     for ln in shown:
         out(paint(f"    {prefix} {ln.rstrip(chr(13) + chr(10))}"))
     if len(lines) > MAX_SHOWN:
@@ -243,7 +270,10 @@ def _show(lines, prefix, paint, out):
 
 def render(change: Change, dl, sl, names, st: Style, out=print, index=None, total=None):
     tag = f"[{index}/{total}] " if index else ""
-    out(st.bold(f"  {tag}{change.path}") + (st.dim(f"   ({change.context})") if change.context else ""))
+    head = st.bold(f"  {tag}{change.title or change.path}")
+    if change.title:
+        head += st.dim(f"   {change.path}")
+    out(head + (st.dim(f"   ({change.context})") if change.context else ""))
     old, new = dl[change.dest[0]:change.dest[1]], sl[change.src[0]:change.src[1]]
     if old:
         out(st.dim(f"    {names[0]}:"))
