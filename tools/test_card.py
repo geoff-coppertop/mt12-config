@@ -136,6 +136,17 @@ class ReviewTests(CardTests):
         self.assertIn("MODELS/model01.yml", out)
         self.assertNotIn("model02.yml  1 change", out)  # identical to the card
 
+    def test_changes_are_headed_by_model_name(self):
+        import contextlib, io
+        old = b"header: \r\n   name: \"M-07R\"\r\na: 1\r\n"
+        write(self.radio / "MODELS" / "model01.yml", old)
+        write(self.card / "MODELS" / "model01.yml", old.replace(b"a: 1", b"a: 2"))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            c.cmd_status(self.card, self.radio)
+        self.assertIn("M-07R", buf.getvalue())
+        self.assertIn("M-07R: a", buf.getvalue())
+
     def test_gvar_changes_are_named(self):
         old = (b"flightModeData: \r\n   0:\r\n      gvars: \r\n         3:\r\n            val: 34\r\n"
                b"gvars: \r\n   3:\r\n      name: \"BrW\"\r\n      max: 924\r\n")

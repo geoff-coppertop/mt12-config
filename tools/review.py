@@ -223,6 +223,20 @@ def _titles(changes: list[Change], dest: bytes, src: bytes) -> None:
             c.title = f"gvar {gvar(int(m[1]))}" + (f" {m[2]}" if m[2] else "")
 
 
+def file_label(rel: str, *blobs: bytes) -> str:
+    """A human name for a file: the model's name for model files, else the path."""
+    if rel.replace("\\", "/").endswith("RADIO/radio.yml"):
+        return "Radio settings"
+    for blob in blobs:
+        try:
+            name = ((yaml.safe_load(blob) or {}).get("header") or {}).get("name")
+        except (yaml.YAMLError, AttributeError, TypeError):
+            continue
+        if name:
+            return str(name)
+    return ""
+
+
 def significant(changes: list[Change]) -> list[Change]:
     return [c for c in changes if not c.noise]
 
@@ -273,9 +287,9 @@ def _show(lines, prefix, paint, out):
         out(paint(f"    {prefix} ... {len(lines) - MAX_SHOWN} more lines"))
 
 
-def render(change: Change, dl, sl, names, st: Style, out=print, index=None, total=None):
+def render(change: Change, dl, sl, names, st: Style, out=print, index=None, total=None, owner=""):
     tag = f"[{index}/{total}] " if index else ""
-    head = st.bold(f"  {tag}{change.title or change.path}")
+    head = st.bold(f"  {tag}{owner + ': ' if owner else ''}{change.title or change.path}")
     if change.title:
         head += st.dim(f"   {change.path}")
     out(head + (st.dim(f"   ({change.context})") if change.context else ""))
@@ -305,7 +319,9 @@ class Session:
         dl, sl = split_lines(dest), split_lines(src)
         self.out("")
         n = len(significant(changes))
-        self.out(self.st.cyan(f"{label}") + f"  {n} change{'s' * (n != 1)}"
+        owner = file_label(label, dest, src)
+        shown = f"{owner}  {self.st.dim('(' + label + ')')}" if owner else label
+        self.out(self.st.cyan(shown) + f"  {n} change{'s' * (n != 1)}"
                  + self.st.dim(f"   - {self.names[0]}   + {self.names[1]}"))
         accepted: set[int] = set()
         noise = {i for i, c in enumerate(changes) if c.noise}
@@ -313,7 +329,7 @@ class Session:
         real = [i for i in range(len(changes)) if i not in noise]
         for n, i in enumerate(real):
             c = changes[i]
-            render(c, dl, sl, self.names, self.st, self.out, n + 1, len(real))
+            render(c, dl, sl, self.names, self.st, self.out, n + 1, len(real), owner)
             if self.auto:
                 take = self.auto == "A"
             elif sticky:
@@ -351,7 +367,9 @@ def show_only(label, dest, src, changes, names, out=print, color=None):
     st = Style(sys.stdout.isatty() if color is None else color)
     changes = significant(changes)
     dl, sl = split_lines(dest), split_lines(src)
-    out(st.cyan(label) + f"  {len(changes)} change{'s' * (len(changes) != 1)}"
+    owner = file_label(label, dest, src)
+    out(st.cyan(f"{owner}  {st.dim('(' + label + ')')}" if owner else label)
+        + f"  {len(changes)} change{'s' * (len(changes) != 1)}"
         + st.dim(f"   - {names[0]}   + {names[1]}"))
     for i, c in enumerate(changes):
-        render(c, dl, sl, names, st, out, i + 1, len(changes))
+        render(c, dl, sl, names, st, out, i + 1, len(changes), owner)
