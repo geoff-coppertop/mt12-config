@@ -260,7 +260,7 @@ def render(change: Change, dl, sl, names, st: Style, out=print, index=None, tota
 class Session:
     """Asks about each change; remembers 'all' / 'none' answers across files."""
 
-    def __init__(self, names=("radio/", "card"), color=None, ask=input, out=print):
+    def __init__(self, names=("computer", "radio"), color=None, ask=input, out=print):
         self.names = names
         self.st = Style(sys.stdout.isatty() if color is None else color)
         self.ask, self.out = ask, out

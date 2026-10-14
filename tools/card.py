@@ -186,7 +186,7 @@ def cmd_status(card: Path, radio: Path) -> int:
     changed, only_card, only_repo = diff(card, radio)
     changed = [p for p in changed if review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))]
     print(f"card: {card}")
-    names = ("radio/", "card")
+    names = ("computer", "radio")
     for p in changed:
         review.show_only(p.as_posix(), (radio / p).read_bytes(), (card / p).read_bytes(),
                          review.diff((radio / p).read_bytes(), (card / p).read_bytes()), names)
@@ -345,9 +345,9 @@ def main(argv=None) -> int:
         wanted = args.review or review_enabled(args.command)
         interactive = sys.stdin.isatty() and not args.all and wanted
         if args.command == "pull":
-            session = review.Session(("radio/", "card")) if interactive else None
+            session = review.Session(("computer", "radio")) if interactive else None
             return cmd_pull(card, radio, not args.no_git, not args.no_push, session=session)
-        session = review.Session(("card", "generated")) if interactive else None
+        session = review.Session(("radio", "computer")) if interactive else None
         return cmd_push(card, radio, ROOT / "build" / "MODELS", args.force, args.dry_run, session=session)
     except (CardError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

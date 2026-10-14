@@ -31,7 +31,7 @@ uv run tools/card.py push       # build/MODELS -> card
 ```
 
 `status` shows what changed setting by setting (`mixData[2].weight`, `trimInc`), with
-the old value in red (`-`) and the new in green (`+`). `pull` and `push` walk through
+the `computer` value (the copy in `radio/`) in red (`-`) and the `radio` value (from the card) in green (`+`). On `push` it is the other way round: `radio` is the card's current file, `computer` is the generated one. `pull` and `push` walk through
 those same changes in a terminal and ask `y`/`n` for each, like `git add -p`
 (`a` take the rest of the file, `r` reject it, `A`/`N` all/none of the remaining files,
 `q` quit without writing). Only accepted changes are spliced in, so the files stay
