@@ -154,7 +154,7 @@ def write_bytes(data: bytes, dst: Path) -> None:
         raise CardError(f"verification failed after writing {dst}")
 
 
-def review_file(rel: Path, dest: Path, src: Path, session) -> bytes | None:
+def review_file(rel: Path, dest: Path, src: Path, session, unbacked: set | None = None) -> bytes | None:
     """Ask which changes to take from `src` into `dest`; None if nothing changes."""
     new = src.read_bytes()
     old = dest.read_bytes() if dest.exists() else None
@@ -167,6 +167,9 @@ def review_file(rel: Path, dest: Path, src: Path, session) -> bytes | None:
         old = b""
     else:
         changes = review.diff(old, new)
+        for ch in changes:
+            if ch.path in (unbacked or ()):
+                ch.note = "also changed on the radio since the last backup; rejecting keeps the radio's value"
     accepted = session.review(rel.as_posix(), old, new, changes)
     if not accepted:
         return None
@@ -184,7 +187,12 @@ def diff(card: Path, repo_radio: Path):
 
 def cmd_status(card: Path, radio: Path, build: Path | None = None) -> int:
     changed, only_card, only_repo = diff(card, radio)
-    changed = [p for p in changed if review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))]
+    unbacked: dict[Path, set[str]] = {}
+    for p in changed:
+        sig = review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))
+        if sig:
+            unbacked[p] = {c.path for c in sig}
+    changed = [p for p in changed if p in unbacked]
     print(f"card: {card}")
     names = ("computer", "radio")
     if changed:
@@ -199,11 +207,11 @@ def cmd_status(card: Path, radio: Path, build: Path | None = None) -> int:
     if not (changed or only_card or only_repo):
         print("  card and radio/ are identical")
     if build is not None:
-        status_build(card, build)
+        status_build(card, build, unbacked)
     return 0
 
 
-def status_build(card: Path, build: Path) -> int | None:
+def status_build(card: Path, build: Path, unbacked: dict | None = None) -> int | None:
     """Show what `push` would change: generated files in build/ against the card."""
     files = sorted(p.relative_to(build.parent) for p in build.glob("model*.yml"))
     print()
@@ -220,6 +228,9 @@ def status_build(card: Path, build: Path) -> int | None:
             continue
         dest = (card / rel).read_bytes()
         changes = review.diff(dest, src)
+        for ch in changes:
+            if ch.path in (unbacked or {}).get(rel, ()):
+                ch.note = "also changed on the radio since the last backup; `pull` first or push would undo it"
         if review.significant(changes):
             review.show_only(rel.as_posix(), dest, src, changes, names)
             print()
@@ -323,7 +334,11 @@ def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, r
         results = {}
         try:
             for rel in files:
-                data = review_file(rel, card / rel, build.parent / rel, session)
+                mine = set()
+                if (card / rel).exists() and (radio / rel).exists():
+                    mine = {ch.path for ch in review.significant(
+                        review.diff((radio / rel).read_bytes(), (card / rel).read_bytes()))}
+                data = review_file(rel, card / rel, build.parent / rel, session, mine)
                 if data is not None:
                     results[rel] = data
         except review.ReviewAbort:

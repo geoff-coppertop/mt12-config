@@ -34,6 +34,7 @@ class Change:
     src: tuple[int, int]    # lines [lo, hi) taken from the source
     context: str = ""
     title: str = ""   # friendlier name than the path, when we can work one out
+    note: str = ""    # warning shown under the heading
 
     @property
     def noise(self) -> bool:
@@ -293,6 +294,8 @@ def render(change: Change, dl, sl, names, st: Style, out=print, index=None, tota
     if change.title:
         head += st.dim(f"   {change.path}")
     out(head + (st.dim(f"   ({change.context})") if change.context else ""))
+    if change.note:
+        out(st.red(f"    ! {change.note}"))
     old, new = dl[change.dest[0]:change.dest[1]], sl[change.src[0]:change.src[1]]
     if old:
         out(st.dim(f"    {names[0]}:"))

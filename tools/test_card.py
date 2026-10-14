@@ -147,6 +147,16 @@ class ReviewTests(CardTests):
         self.assertIn("M-07R", buf.getvalue())
         self.assertIn("M-07R: a", buf.getvalue())
 
+    def test_status_warns_when_push_would_undo_unbacked_radio_change(self):
+        import contextlib, io
+        write(self.radio / "MODELS" / "model01.yml", b"a: 1\r\n")
+        write(self.card / "MODELS" / "model01.yml", b"a: 2\r\n")  # changed on the radio
+        write(self.build / "model01.yml", b"a: 1\r\n")  # generated from the old backup
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            c.cmd_status(self.card, self.radio, self.build)
+        self.assertIn("pull` first", buf.getvalue())
+
     def test_gvar_changes_are_named(self):
         old = (b"flightModeData: \r\n   0:\r\n      gvars: \r\n         3:\r\n            val: 34\r\n"
                b"gvars: \r\n   3:\r\n      name: \"BrW\"\r\n      max: 924\r\n")
