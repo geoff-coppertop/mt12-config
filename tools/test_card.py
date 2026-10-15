@@ -164,6 +164,15 @@ class ReviewTests(CardTests):
         new = base.replace(b"70", b"66").replace(b"0,1,10", b"0,1,20")
         self.assertEqual(sorted(ch.title for ch in c.review.diff(base, new)),
                          ["L1: RxBt < 6.6 V", "SF1: haptic when L1"])
+        # with a model that is in alerts.yml, the generator's roles are shown
+        titles = sorted(ch.title for ch in c.review.diff(base, new, "model01.yml"))
+        self.assertEqual(titles, ["L1 (warning): RxBt < 6.6 V", "SF1: haptic when L1"])  # SF1 is an adjuster slot
+
+    def test_alert_roles_follow_alerts_yml(self):
+        roles = c.review.alert_roles("model01.yml")
+        self.assertEqual([(s, r[0], r[1]["type"]) for s, r in sorted(roles.items())],
+                         [(3, "warning", "haptic"), (4, "alarm", "haptic"), (5, "alarm", "sound")])
+        self.assertEqual(c.review.alert_roles("nope.yml"), {})
 
     def test_gvar_changes_are_named(self):
         old = (b"flightModeData: \r\n   0:\r\n      gvars: \r\n         3:\r\n            val: 34\r\n"

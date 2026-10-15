@@ -166,7 +166,7 @@ def review_file(rel: Path, dest: Path, src: Path, session, unbacked: set | None 
         changes = [review.Change("(whole file is new)", (0, 0), (0, len(review.split_lines(new))))]
         old = b""
     else:
-        changes = review.diff(old, new)
+        changes = review.diff(old, new, rel.name)
         for ch in changes:
             if ch.path in (unbacked or ()):
                 ch.note = "also changed on the radio since the last backup; rejecting keeps the radio's value"
@@ -199,7 +199,7 @@ def cmd_status(card: Path, radio: Path, build: Path | None = None) -> int:
         print("on the radio but not backed up (what `pull` would take; - computer, + radio):")
     for p in changed:
         review.show_only(p.as_posix(), (radio / p).read_bytes(), (card / p).read_bytes(),
-                         review.diff((radio / p).read_bytes(), (card / p).read_bytes()), names)
+                         review.diff((radio / p).read_bytes(), (card / p).read_bytes(), p.name), names)
         print()
     for label, items in (("only on card", only_card), ("only in radio/", only_repo)):
         for p in items:
@@ -227,7 +227,7 @@ def status_build(card: Path, build: Path, unbacked: dict | None = None) -> int |
             shown += 1
             continue
         dest = (card / rel).read_bytes()
-        changes = review.diff(dest, src)
+        changes = review.diff(dest, src, rel.name)
         for ch in changes:
             if ch.path in (unbacked or {}).get(rel, ()):
                 ch.note = "also changed on the radio since the last backup; `pull` first or push would undo it"
