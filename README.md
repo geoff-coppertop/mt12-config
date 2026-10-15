@@ -7,7 +7,7 @@ for RxBt battery warning/alarm alerts on the two ER3C-i cars (M-07R and BD-8).
 radio/            byte-exact copy of the card: MODELS/, RADIO/radio.yml, version file
 alerts/alerts.yml thresholds, profiles, actions, per-model settings
 alerts/gen_alerts.py  reads radio/MODELS, writes build/MODELS (gitignored)
-tools/card.py     pull from / push to the SD card
+tools/card.py     sync the SD card with radio/ and GitHub
 ```
 
 Not tracked: `SCRIPTS/` (stock), `SOUNDS/` (stock pack), `LOGS/`, `SCREENSHOTS/`,
@@ -25,43 +25,30 @@ Files are copied as bytes, so CRLF survives, and `.gitattributes` stops Windows
 git (`autocrlf`) from rewriting them.
 
 ```
-uv run tools/card.py status     # what differs between card and radio/
-uv run tools/card.py pull       # card -> radio/, commit "Backup from card <time>", push to GitHub
-uv run tools/card.py push       # build/MODELS -> card
+uv run tools/card.py sync     # regenerate, then make card, radio/ and GitHub agree
+uv run tools/card.py status   # what sync would do, without doing it
 ```
 
-`status` has two parts: what is on the radio but not yet backed up (what `pull` would take), and what the generated `build/MODELS` would change on the card (what `push` would do; run `alerts/gen_alerts.py` first so `build/` is current). It shows what changed setting by setting (`mixData[2].weight`, `trimInc`), with
-the `computer` value (the copy in `radio/`) in red (`-`) and the `radio` value (from the card) in green (`+`). On `push` it is the other way round: `radio` is the card's current file, `computer` is the generated one. `pull` and `push` walk through
-those same changes in a terminal and ask `y`/`n` for each, like `git add -p`
-(`a` take the rest of the file, `r` reject it, `A`/`N` all/none of the remaining files,
-`q` quit without writing). Only accepted changes are spliced in, so the files stay
-byte-exact. On `push`, trims or gvars changed on the card show up as changes you can
-reject to keep. The review names the generator's own switches and functions by their role from `alerts/alerts.yml`, e.g. `L1 (warning): RxBt < 7.0 V and not L2` and `SF6: alarm sound (Wrn1)`.
+`sync` compares three copies of every file: the card (the radio's own), `radio/` (as of
+the last sync) and the generated `build/MODELS`. A setting changed on one side only is
+taken from that side without asking, so a trim you changed on the radio is kept and new
+alert logic goes to the card. Only a setting changed on both sides asks which to keep.
+It then writes the card and `radio/` (byte-exact, CRLF kept), commits `radio/` and
+pushes to GitHub. Afterwards `status` shows nothing. Options: `--dry-run`, `--no-push`,
+`--no-git`. Replaced card files are saved in `build/previous/<time>/`.
 
-`checksum` and `globalTimer` in `radio.yml` are rewritten by the radio itself, so they are never asked about: they come along when you accept any other change in that file, and a file where only they differ counts as unchanged. `--all` skips the questions for one run. To turn them off for good, per command, put
-this in `card.yml` at the repo root (`--review` asks anyway; `status` always shows the diff):
+Settings are named, not numbered: `M-07R: BrW`, `L1 (warning): RxBt < 7.0 V and not L2`,
+`SF6: alarm sound (Wrn1)` (roles from `alerts/alerts.yml`). `checksum` and `globalTimer`
+in `radio.yml` change on every use of the radio, so they never count as changes. Mixes
+inserted in the middle of a list may show as a block of line changes.
 
-```yaml
-review:
-  pull: false   # take everything from the card without asking
-  push: true
-```
+The radio saves a changed gvar or trim to the card only when the model is saved
+(switching models or powering off). Changes made while the card is mounted over USB
+never reach the card.
 
-Turning review off for `push` is the same as `--all`: the refusals for unbacked card
-changes and a stale `build/` still apply (`--force` overrides them). Mixes inserted in the middle of a list
-may be shown as a block of line changes.
-
-`pull` options: `--no-push` (commit only), `--no-git` (copy only). It does nothing
-if the card matches the last backup. `push` options: `--dry-run`, `--force`.
-
-**Race tweak, then backup:** `pull`.
-**Tweak, then push:** `pull` (so the repo has the latest trims and gvars), edit
-`alerts/alerts.yml`, `uv run alerts/gen_alerts.py`, `push`, then eject the card.
-
-`push` refuses when a card file differs from both the last backup and the last
-push (changes made on the radio that would be lost), and when `build/` is older
-than `radio/` (regenerate first). It saves the files it replaces in
-`build/previous/<time>/` and re-reads each file after writing it.
+`pull` (card -> `radio/` with y/n per change) and `push` (`build/` -> card) still exist for
+one-direction runs; `push` now copies what it wrote into `radio/` too. `card.yml` can turn
+their questions off: `review: {pull: false, push: false}`; `--all` does it for one run.
 
 WSL does not mount removable drives by itself. If no card is found, mount it once
 per insertion: `sudo mkdir -p /mnt/e && sudo mount -t drvfs E: /mnt/e` (see
@@ -82,7 +69,7 @@ uv run alerts/gen_alerts.py --profile practice
 uv run python -m unittest alerts.test_gen_alerts tools.test_card
 ```
 
-Push them with `uv run tools/card.py push` (or copy `build/MODELS/*` to `MODELS/` on the card), then open
+Run `uv run tools/card.py sync` (it regenerates and pushes) (or copy `build/MODELS/*` to `MODELS/` on the card), then open
 each model on the radio (or in EdgeTX Companion) and check Logical Switches and
 Special Functions before relying on it. To test, temporarily raise the warning
 voltage above a fresh pack's voltage and confirm it fires after the delay.
