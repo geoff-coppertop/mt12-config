@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Sync the MT12 SD card with this repo: back up from the card, push generated models to it.
 
-  uv run tools/card.py status            setting-by-setting diff between card and radio/
+  uv run tools/card.py sync              regenerate, then make card, radio/ and GitHub agree; asks only about
+                                         settings changed on both sides
+  uv run tools/card.py status            what sync would do, without doing it
   uv run tools/card.py pull              card -> radio/ (you accept or reject each change), commit, push
   uv run tools/card.py push              build/MODELS -> card (you accept or reject each change)
 
@@ -30,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools import review  # noqa: E402
+from tools import review, sync  # noqa: E402
 BOARD = "mt12"
 
 
@@ -185,59 +187,37 @@ def diff(card: Path, repo_radio: Path):
 
 # ------------------------------------------------------------------- commands
 
-def cmd_status(card: Path, radio: Path, build: Path | None = None) -> int:
-    changed, only_card, only_repo = diff(card, radio)
-    unbacked: dict[Path, set[str]] = {}
-    for p in changed:
-        sig = review.significant(review.diff((radio / p).read_bytes(), (card / p).read_bytes()))
-        if sig:
-            unbacked[p] = {c.path for c in sig}
-    changed = [p for p in changed if p in unbacked]
-    print(f"card: {card}")
-    names = ("computer", "radio")
-    if changed:
-        print("on the radio but not backed up (what `pull` would take; - computer, + radio):")
-    for p in changed:
-        review.show_only(p.as_posix(), (radio / p).read_bytes(), (card / p).read_bytes(),
-                         review.diff((radio / p).read_bytes(), (card / p).read_bytes(), p.name), names)
+def make_plans(card: Path, radio: Path, build: Path | None) -> list[sync.FilePlan]:
+    """One plan per file: base = radio/ (last sync), card = the radio's own copy, comp = build/."""
+    bdir = build.parent if build is not None else None
+    rels = set(tracked_files(card)) | set(tracked_files(radio))
+    if bdir is not None:
+        rels |= {p.relative_to(bdir) for p in build.glob("model*.yml")}
+    read = lambda p: p.read_bytes() if p.is_file() else None
+    plans = []
+    for rel in sorted(rels):
+        comp = read(bdir / rel) if bdir is not None else None
+        plans.append(sync.plan_file(rel, read(radio / rel), read(card / rel), comp))
+    return [p for p in plans if not p.empty or p.note]
+
+
+def print_plans(plans: list[sync.FilePlan], chosen: dict | None = None) -> None:
+    for p in plans:
+        print(p.label)
+        for line in sync.describe(p, (chosen or {}).get(p.rel)):
+            print(line)
         print()
-    for label, items in (("only on card", only_card), ("only in radio/", only_repo)):
-        for p in items:
-            print(f"  {label}: {p}")
-    if not (changed or only_card or only_repo):
-        print("  card and radio/ are identical")
-    if build is not None:
-        status_build(card, build, unbacked)
-    return 0
 
 
-def status_build(card: Path, build: Path, unbacked: dict | None = None) -> int | None:
-    """Show what `push` would change: generated files in build/ against the card."""
-    files = sorted(p.relative_to(build.parent) for p in build.glob("model*.yml"))
+def cmd_status(card: Path, radio: Path, build: Path | None = None) -> int:
+    print(f"card: {card}")
+    plans = make_plans(card, radio, build)
+    if not plans:
+        print("  card, radio/ and build/ agree; nothing to sync")
+        return 0
     print()
-    if not files:
-        print("generated (build/MODELS): nothing there; run alerts/gen_alerts.py to see what push would add")
-        return None
-    names, shown = ("radio", "computer"), 0
-    print("not on the radio yet (what `push` would change; - radio, + computer):")
-    for rel in files:
-        src = (build.parent / rel).read_bytes()
-        if not (card / rel).exists():
-            print(f"  {rel.as_posix()}: new file, not on the card")
-            shown += 1
-            continue
-        dest = (card / rel).read_bytes()
-        changes = review.diff(dest, src, rel.name)
-        for ch in changes:
-            if ch.path in (unbacked or {}).get(rel, ()):
-                ch.note = "also changed on the radio since the last backup; `pull` first or push would undo it"
-        if review.significant(changes):
-            review.show_only(rel.as_posix(), dest, src, changes, names)
-            print()
-            shown += 1
-    if not shown:
-        print("  generated files match the card")
-    return shown
+    print_plans(plans)
+    return 0
 
 
 def git(*args, root=ROOT):
@@ -363,6 +343,7 @@ def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, r
         else:
             copy_bytes(build.parent / rel, card / rel)
         last_push[rel.as_posix()] = digest(card / rel)
+        write_bytes((card / rel).read_bytes(), radio / rel)  # keep the backup equal to the card
         print(f"wrote {card / rel}")
     if not dry_run:
         state_file.write_text(json.dumps(last_push, indent=2))
@@ -371,29 +352,116 @@ def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, r
     return 0
 
 
+def cmd_sync(card: Path, radio: Path, build: Path, use_git: bool, push: bool, dry_run: bool,
+             root: Path = ROOT, session=None, regenerate=None) -> int:
+    """Make the card, radio/ and GitHub agree. Only settings changed on both sides ask."""
+    if regenerate is not None:
+        regenerate()
+    plans = make_plans(card, radio, build)
+    todo = [p for p in plans if not p.note or p.whole is not None]
+    print(f"card: {card}")
+    if not todo:
+        print("  nothing to sync")
+        return 0
+    conflicts = sum(len(p.groups) for p in todo)
+    chosen: dict = {}
+    if conflicts and not dry_run:
+        if session is None:
+            print_plans(plans)
+            print(f"{conflicts} setting(s) changed on both sides; run in a terminal to choose, nothing written", file=sys.stderr)
+            return 2
+        try:
+            k = 0
+            for p in todo:
+                chosen[p.rel] = []
+                for group in p.groups:
+                    k += 1
+                    chosen[p.rel].append(sync.ask_conflict(p, group, session, k, conflicts))
+        except review.ReviewAbort:
+            print("\nabandoned; nothing was written")
+            return 1
+    results = {}
+    try:
+        for p in todo:
+            results[p.rel] = sync.result(p, chosen.get(p.rel) or ["radio"] * len(p.groups))
+    except sync.SyncError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print()
+    print_plans(plans, chosen or None)
+    if dry_run:
+        print("dry run: nothing written")
+        return 0
+    saved = build.parent / "previous" / time.strftime("%Y%m%d-%H%M%S")
+    wrote_card = wrote_repo = 0
+    for p in todo:
+        data = results[p.rel]
+        if p.card != data:
+            if (card / p.rel).exists():
+                copy_bytes(card / p.rel, saved / p.rel)
+            write_bytes(data, card / p.rel)
+            wrote_card += 1
+        if p.base != data:
+            write_bytes(data, radio / p.rel)
+            wrote_repo += 1
+    print(f"card: {wrote_card} file(s) written; radio/: {wrote_repo} file(s) written")
+    if wrote_card:
+        print(f"previous card files saved in {saved}")
+        print("eject the card safely before putting it back in the radio")
+    if not use_git or not wrote_repo:
+        return 0
+    git("add", "radio", root=root)
+    if git("diff", "--cached", "--quiet", "--", "radio", root=root).returncode == 0:
+        return 0
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    res = git("commit", "-m", f"Sync with card {stamp}", root=root)
+    if res.returncode:
+        print(res.stderr or res.stdout, file=sys.stderr)
+        return 1
+    print(f"committed ({stamp})")
+    if push:
+        res = git("push", root=root)
+        if res.returncode:
+            print("push failed:\n" + (res.stderr or res.stdout), file=sys.stderr)
+            return 1
+        print("pushed to GitHub")
+    return 0
+
+
+def regenerate_alerts() -> None:
+    res = subprocess.run([sys.executable, str(ROOT / "alerts" / "gen_alerts.py")], text=True, capture_output=True)
+    if res.returncode:
+        raise CardError("alerts/gen_alerts.py failed:\n" + (res.stderr or res.stdout))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("command", choices=["status", "pull", "push"])
+    ap.add_argument("command", choices=["sync", "status", "pull", "push"])
     ap.add_argument("--card", help="card root, e.g. E:\\ or /mnt/e or /media/me/MT12")
-    ap.add_argument("--no-git", action="store_true", help="pull: copy only, no commit")
-    ap.add_argument("--no-push", action="store_true", help="pull: commit but do not push to GitHub")
+    ap.add_argument("--no-git", action="store_true", help="sync/pull: copy only, no commit")
+    ap.add_argument("--no-push", action="store_true", help="sync/pull: commit but do not push to GitHub")
     ap.add_argument("--force", action="store_true", help="push: overwrite even if the card is out of sync")
     ap.add_argument("--all", action="store_true", help="pull/push: take every change without asking")
     ap.add_argument("--review", action="store_true", help="pull/push: ask even if card.yml turns review off")
-    ap.add_argument("--dry-run", action="store_true", help="push: show what would be written")
+    ap.add_argument("--dry-run", action="store_true", help="sync/push: show what would happen, write nothing")
     args = ap.parse_args(argv)
     try:
         card = find_card(args.card)
         radio = ROOT / "radio"
+        build = ROOT / "build" / "MODELS"
         if args.command == "status":
-            return cmd_status(card, radio, ROOT / "build" / "MODELS")
+            return cmd_status(card, radio, build)
+        if args.command == "sync":
+            session = review.Session(("radio", "computer")) if sys.stdin.isatty() else None
+            return cmd_sync(card, radio, build, not args.no_git, not args.no_push, args.dry_run,
+                            session=session, regenerate=regenerate_alerts)
         wanted = args.review or review_enabled(args.command)
         interactive = sys.stdin.isatty() and not args.all and wanted
         if args.command == "pull":
             session = review.Session(("computer", "radio")) if interactive else None
             return cmd_pull(card, radio, not args.no_git, not args.no_push, session=session)
         session = review.Session(("radio", "computer")) if interactive else None
-        return cmd_push(card, radio, ROOT / "build" / "MODELS", args.force, args.dry_run, session=session)
+        return cmd_push(card, radio, build, args.force, args.dry_run, session=session)
     except (CardError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

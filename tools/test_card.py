@@ -132,9 +132,9 @@ class ReviewTests(CardTests):
         with contextlib.redirect_stdout(buf):
             c.cmd_status(self.card, self.radio, self.build)
         out = buf.getvalue()
-        self.assertIn("not on the radio yet", out)
+        self.assertIn("computer -> radio  a: 1 -> 2", out)
         self.assertIn("MODELS/model01.yml", out)
-        self.assertNotIn("model02.yml  1 change", out)  # identical to the card
+        self.assertNotIn("model02.yml", out)  # identical to the card
 
     def test_changes_are_headed_by_model_name(self):
         import contextlib, io
@@ -145,17 +145,72 @@ class ReviewTests(CardTests):
         with contextlib.redirect_stdout(buf):
             c.cmd_status(self.card, self.radio)
         self.assertIn("M-07R", buf.getvalue())
-        self.assertIn("M-07R: a", buf.getvalue())
+        self.assertIn("radio -> computer  a: 1 -> 2", buf.getvalue())
 
-    def test_status_warns_when_push_would_undo_unbacked_radio_change(self):
+    def test_status_is_the_three_way_plan(self):
         import contextlib, io
-        write(self.radio / "MODELS" / "model01.yml", b"a: 1\r\n")
-        write(self.card / "MODELS" / "model01.yml", b"a: 2\r\n")  # changed on the radio
-        write(self.build / "model01.yml", b"a: 1\r\n")  # generated from the old backup
+        write(self.radio / "MODELS" / "model01.yml", b"a: 1\r\nb: 1\r\n")
+        write(self.card / "MODELS" / "model01.yml", b"a: 2\r\nb: 1\r\n")   # radio changed a
+        write(self.build / "model01.yml", b"a: 1\r\nb: 5\r\n")            # computer changed b
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             c.cmd_status(self.card, self.radio, self.build)
-        self.assertIn("pull` first", buf.getvalue())
+        out = buf.getvalue()
+        self.assertIn("radio -> computer  a: 1 -> 2", out)
+        self.assertIn("computer -> radio  b: 1 -> 5", out)
+        self.assertNotIn("CONFLICT", out)
+
+    def sync(self, session=None, dry_run=False):
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return c.cmd_sync(self.card, self.radio, self.build, use_git=False, push=False,
+                              dry_run=dry_run, root=self.root, session=session)
+
+    def test_sync_merges_both_directions_without_asking(self):
+        write(self.radio / "MODELS" / "model01.yml", b"a: 1\r\nb: 1\r\n")
+        write(self.card / "MODELS" / "model01.yml", b"a: 2\r\nb: 1\r\n")
+        write(self.build / "model01.yml", b"a: 1\r\nb: 5\r\n")
+        self.assertEqual(self.sync(), 0)  # no session: would fail if it needed to ask
+        merged = b"a: 2\r\nb: 5\r\n"
+        self.assertEqual((self.card / "MODELS" / "model01.yml").read_bytes(), merged)
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), merged)
+
+    def test_after_sync_status_and_a_second_sync_have_nothing_to_do(self):
+        import contextlib, io
+        write(self.radio / "MODELS" / "model01.yml", b"a: 1\r\nb: 1\r\n")
+        write(self.card / "MODELS" / "model01.yml", b"a: 2\r\nb: 1\r\n")
+        write(self.build / "model01.yml", b"a: 1\r\nb: 5\r\n")
+        self.sync()
+        write(self.build / "model01.yml", b"a: 2\r\nb: 5\r\n")  # what gen_alerts makes from the new radio/
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            c.cmd_status(self.card, self.radio, self.build)
+        self.assertIn("nothing to sync", buf.getvalue())
+
+    def test_sync_asks_only_about_conflicts(self):
+        write(self.radio / "MODELS" / "model01.yml", b"a: 1\r\nb: 1\r\n")
+        write(self.card / "MODELS" / "model01.yml", b"a: 2\r\nb: 1\r\n")
+        write(self.build / "model01.yml", b"a: 3\r\nb: 1\r\n")
+        self.assertEqual(self.sync(), 2)  # conflict and no terminal: refuses, writes nothing
+        self.assertEqual((self.card / "MODELS" / "model01.yml").read_bytes(), b"a: 2\r\nb: 1\r\n")
+        self.assertEqual(self.sync(scripted("c")), 0)  # keep the computer's value
+        self.assertEqual((self.card / "MODELS" / "model01.yml").read_bytes(), b"a: 3\r\nb: 1\r\n")
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), b"a: 3\r\nb: 1\r\n")
+
+    def test_sync_ignores_checksum_noise_and_dry_run_writes_nothing(self):
+        write(self.radio / "MODELS" / "model01.yml", b"checksum: 1\r\na: 1\r\n")
+        write(self.card / "MODELS" / "model01.yml", b"checksum: 2\r\na: 1\r\n")
+        write(self.build / "model01.yml", b"checksum: 1\r\na: 1\r\n")
+        self.sync()
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), b"checksum: 1\r\na: 1\r\n")
+        write(self.build / "model01.yml", b"checksum: 1\r\na: 9\r\n")
+        self.sync(dry_run=True)
+        self.assertEqual((self.card / "MODELS" / "model01.yml").read_bytes(), b"checksum: 2\r\na: 1\r\n")
+
+    def test_push_leaves_the_backup_equal_to_the_card(self):
+        write(self.build / "model01.yml", b"generated\r\n", mtime=time.time() + 5)
+        c.cmd_push(self.card, self.radio, self.build, force=False, dry_run=False)
+        self.assertEqual((self.radio / "MODELS" / "model01.yml").read_bytes(), b"generated\r\n")
 
     def test_logical_switches_and_functions_are_described(self):
         base = (b"telemetrySensors: \r\n   10:\r\n      label: \"RxBt\"\r\n      unit: 1\r\n      prec: 1\r\n"

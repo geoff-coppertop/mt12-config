@@ -401,6 +401,7 @@ class Session:
         self.st = Style(sys.stdout.isatty() if color is None else color)
         self.ask, self.out = ask, out
         self.auto: str | None = None
+        self.prefer: str | None = None
 
     def review(self, label: str, dest: bytes, src: bytes, changes: list[Change]) -> set[int]:
         dl, sl = split_lines(dest), split_lines(src)
