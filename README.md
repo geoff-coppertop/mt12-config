@@ -70,6 +70,32 @@ whether a card inserted after WSL started can be mounted this way is untested).
 Not yet tried on a real card, Windows or WSL; the logic is covered by tests on
 temporary folders.
 
+## Update firmware
+
+`versions.yml` pins what gets installed: EdgeTX firmware, the `bw128x64` SD card pack, the sound pack, the ExpressLRS Lua tools, and ExpressLRS firmware for the internal module and both ER3C-i receivers. Every download is checked against its pinned sha256 before anything is written.
+
+```
+uv run tools/card.py check                 # pinned vs newest stable releases
+uv run tools/card.py check --bump          # move the pins (and fill missing hashes); review with git diff
+uv run tools/card.py update --dry-run      # download and verify, print what would happen
+uv run tools/card.py update                # all steps
+uv run tools/card.py update --only sdcard,sounds,lua,firmware
+```
+
+`update` runs in order, prompting you to replug or power-cycle the radio between steps:
+
+1. **Backup:** `pull` with every card change taken, committed as "Backup before update".
+2. **sdcard, sounds, lua:** pack files are copied onto the card, never into `MODELS/`, `RADIO/` or `WIDGETS/` (the MT12 has no widgets). Nothing is deleted, so an old `SCRIPTS/TOOLS/elrs.lua` stays until you remove it.
+3. **firmware:** radio off, USB into the side port (DFU). It waits for `0483:df11`, saves the whole 1 MB flash to `build/flash-backups/<time>-previous.bin` with `dfu-util -U`, then writes the `mt12-*.bin` at `0x08000000`. The image includes the bootloader. Then you boot the radio, open each model once, and it pulls again as "EdgeTX <tag> migration", so model conversion is its own commit.
+4. **module:** ExpressLRS through EdgeTX passthrough. Set SYS > Hardware > USB-VCP to CLI and choose USB Serial (VCP); it finds the `0483:5740` port itself.
+5. **receivers:** for each car over WiFi (`10.0.0.1`, after joining the receiver's `ExpressLRS RX` hotspot), or set `method: uart` for the UART flasher dongle. `s` skips a car.
+
+ELRS uses the official bundle (`firmware.zip` from the ExpressLRS artifactory, the same one their Configurator and web flasher use) and its `flasher.pyz`, with targets `radiomaster.tx_2400.mt12` and `radiomaster.rx_2400.er3` and FCC firmware unless `lbt: true`. Set `MT12_ELRS_PHRASE` in the environment to bake in a bind phrase. Without it, bind with the ExpressLRS Bind tool afterwards. Major ELRS versions do not talk to each other, so do the module and both receivers in one session. If you use Model Config Matching, export the module config from its WebUI first; 4.x moved the flash filesystem.
+
+The ELRS sha256 is empty until the first `check --bump`, which needs `artifactory.expresslrs.org`. `update` refuses the module and receiver steps until then.
+
+Needs `dfu-util` on PATH and USB access to the DFU device and serial ports (on NixOS, `custom.edgetx.enable` in `nixos-config`). Linux only so far. On WSL, USB devices need `usbipd`, which has not been tried. None of this has been run against the radio yet: the logic is covered by `tools/test_update.py`, and the firmware and pack handling was checked against the real v2.12.5, v2.12.3 and v1.0.0 downloads.
+
 ## Generate and apply alerts
 
 Needs [uv](https://docs.astral.sh/uv/); it creates the Python environment from
@@ -79,7 +105,7 @@ Needs [uv](https://docs.astral.sh/uv/); it creates the Python environment from
 uv run alerts/gen_alerts.py --dry-run      # report only
 uv run alerts/gen_alerts.py                # writes build/MODELS/model01.yml and model02.yml
 uv run alerts/gen_alerts.py --profile practice
-uv run python -m unittest alerts.test_gen_alerts tools.test_card
+uv run python -m unittest alerts.test_gen_alerts tools.test_card tools.test_update
 ```
 
 Push them with `uv run tools/card.py push` (or copy `build/MODELS/*` to `MODELS/` on the card), then open
