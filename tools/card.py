@@ -4,6 +4,8 @@
   uv run tools/card.py status            setting-by-setting diff between card and radio/
   uv run tools/card.py pull              card -> radio/ (you accept or reject each change), commit, push
   uv run tools/card.py push              build/MODELS -> card (you accept or reject each change)
+  uv run tools/card.py check [--bump]    pinned firmware versions against the newest releases
+  uv run tools/card.py update            EdgeTX firmware, SD card pack, ELRS (see tools/update.py)
 
 pull and push ask about every changed setting (y/n, like `git add -p`) when run in a
 terminal; --all takes everything without asking. card.yml can turn the questions off per
@@ -30,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools import review  # noqa: E402
+from tools import review, update  # noqa: E402
 BOARD = "mt12"
 
 
@@ -244,7 +246,8 @@ def git(*args, root=ROOT):
     return subprocess.run(["git", "-C", str(root), *args], text=True, capture_output=True)
 
 
-def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = ROOT, session=None) -> int:
+def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = ROOT, session=None,
+             message: str | None = None) -> int:
     partial = False
     if session is None:
         for rel in tracked_files(card):
@@ -279,7 +282,8 @@ def cmd_pull(card: Path, radio: Path, use_git: bool, push: bool, root: Path = RO
         print("no changes since the last backup")
         return 0
     stamp = time.strftime("%Y-%m-%d %H:%M")
-    res = git("commit", "-m", f"{'Partial backup' if partial else 'Backup'} from card {stamp}", root=root)
+    subject = message or f"{'Partial backup' if partial else 'Backup'} from card"
+    res = git("commit", "-m", f"{subject} {stamp}", root=root)
     if res.returncode:
         print(res.stderr or res.stdout, file=sys.stderr)
         return 1
@@ -373,15 +377,29 @@ def cmd_push(card: Path, radio: Path, build: Path, force: bool, dry_run: bool, r
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("command", choices=["status", "pull", "push"])
+    ap.add_argument("command", choices=["status", "pull", "push", "check", "update"])
     ap.add_argument("--card", help="card root, e.g. E:\\ or /mnt/e or /media/me/MT12")
     ap.add_argument("--no-git", action="store_true", help="pull: copy only, no commit")
     ap.add_argument("--no-push", action="store_true", help="pull: commit but do not push to GitHub")
     ap.add_argument("--force", action="store_true", help="push: overwrite even if the card is out of sync")
     ap.add_argument("--all", action="store_true", help="pull/push: take every change without asking")
     ap.add_argument("--review", action="store_true", help="pull/push: ask even if card.yml turns review off")
-    ap.add_argument("--dry-run", action="store_true", help="push: show what would be written")
+    ap.add_argument("--dry-run", action="store_true", help="push/update: show what would be written")
+    ap.add_argument("--bump", action="store_true", help="check: move versions.yml to the newest releases")
+    ap.add_argument("--only", help="update: comma list of " + ", ".join(update.STEPS) + " (default: all)")
     args = ap.parse_args(argv)
+    if args.command in ("check", "update"):
+        try:
+            if args.command == "check":
+                return update.cmd_check(args.bump)
+            steps = args.only.split(",") if args.only else list(update.STEPS)
+            unknown = set(steps) - set(update.STEPS)
+            if unknown:
+                ap.error("unknown --only step(s): " + ", ".join(sorted(unknown)))
+            return update.cmd_update(steps, args.card, args.dry_run, not args.no_push)
+        except (update.UpdateError, CardError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     try:
         card = find_card(args.card)
         radio = ROOT / "radio"
